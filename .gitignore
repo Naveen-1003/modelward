@@ -1,0 +1,38 @@
+# ---- Dependencies ----
+node_modules/
+
+# ---- Python (metrics-service) ----
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# ---- Build output ----
+dist/
+build/
+.vite/
+
+# ---- Environment / secrets ----
+.env
+.env.local
+.env.*.local
+
+# ---- Uploaded files (local disk storage, never committed) ----
+server/uploads/*
+!server/uploads/.gitkeep
+
+# ---- Logs (incl. background dev-server redirects) ----
+*_out.log
+*_err.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+uvicorn*.log
+
+# ---- OS / editor cruft ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
