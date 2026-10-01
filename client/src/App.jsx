@@ -15,7 +15,7 @@ import AdminDashboard from "./pages/AdminDashboard.jsx";
 
 function Home() {
   const { user, loading } = useAuth();
-  if (loading) return <p className="page muted">Loading...</p>;
+  if (loading) return <p className="page muted">Loading…</p>;
   if (!user) return <Navigate to="/login" replace />;
   return <Navigate to={roleHome(user.role)} replace />;
 }
@@ -24,7 +24,7 @@ export default function App() {
   const { user } = useAuth();
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${user ? " has-sidebar" : ""}`}>
       {user && <Navbar />}
       <Routes>
         <Route path="/login" element={<Login />} />

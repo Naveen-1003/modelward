@@ -3,11 +3,13 @@ import { Link, useNavigate } from "react-router-dom";
 import api, { extractError } from "../api/axios.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { roleHome } from "../roleHome.js";
+import { ErrorBox } from "../components/ui.jsx";
+import AuthAside from "./AuthAside.jsx";
 
 const ROLES = [
-  { value: "ml_engineer", label: "ML Engineer / Data Scientist" },
-  { value: "compliance_officer", label: "Compliance Officer / Reviewer" },
-  { value: "admin", label: "Admin" },
+  { value: "ml_engineer", label: "ML Engineer", note: "Register models, upload versions" },
+  { value: "compliance_officer", label: "Compliance Officer", note: "Review, approve and deploy" },
+  { value: "admin", label: "Admin", note: "Portfolio overview and deploys" },
 ];
 
 export default function Signup() {
@@ -33,53 +35,72 @@ export default function Signup() {
   }
 
   return (
-    <main className="page" style={{ maxWidth: 420 }}>
-      <h2>Create your ModelWard account</h2>
-      <p className="muted">
-        MVP shortcut: pick your role here directly, no invite flow.
-      </p>
-      {error && <div className="error-box">{error}</div>}
-      <form onSubmit={handleSubmit}>
-        <label>
-          Full name
-          <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        </label>
-        <label>
-          Email
-          <input
-            type="email"
-            required
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-          />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            required
-            minLength={6}
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-          />
-        </label>
-        <label>
-          Role
-          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-            {ROLES.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" disabled={submitting} aria-busy={submitting}>
-          Create account
-        </button>
-      </form>
-      <p className="muted">
-        Already have an account? <Link to="/login">Log in</Link>
-      </p>
+    <main className="auth-page">
+      <AuthAside />
+      <section className="auth-main">
+        <div className="auth-card">
+          <h1>Create your account</h1>
+          <p className="muted">Choose the role you'll work in. There's no invite flow yet.</p>
+          <ErrorBox>{error}</ErrorBox>
+          <form onSubmit={handleSubmit}>
+            <label>
+              Full name
+              <input
+                required
+                autoComplete="name"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </label>
+            <label>
+              Email
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                required
+                minLength={6}
+                autoComplete="new-password"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+              />
+              <small className="hint">At least 6 characters</small>
+            </label>
+            <fieldset className="choice-group">
+              <legend>Role</legend>
+              {ROLES.map((r) => (
+                <label key={r.value} className="choice">
+                  <input
+                    type="radio"
+                    name="role"
+                    value={r.value}
+                    checked={form.role === r.value}
+                    onChange={() => setForm({ ...form, role: r.value })}
+                  />
+                  <span>
+                    <strong>{r.label}</strong>
+                    <small>{r.note}</small>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <button type="submit" disabled={submitting} aria-busy={submitting}>
+              {submitting ? "Creating account…" : "Create account"}
+            </button>
+          </form>
+          <p className="muted auth-switch">
+            Already registered? <Link to="/login">Sign in</Link>
+          </p>
+        </div>
+      </section>
     </main>
   );
 }

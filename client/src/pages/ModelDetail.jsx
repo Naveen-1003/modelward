@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import RiskBadge from "../components/RiskBadge.jsx";
 import VersionDetail from "../components/VersionDetail.jsx";
+import { Icon, PageHeader, Loading, ErrorBox } from "../components/ui.jsx";
 
 const FILE_TYPES = ["csv", "pickle", "joblib"];
 
@@ -81,58 +82,59 @@ export default function ModelDetail() {
     }
   }
 
-  if (loading && !model) return <p className="page muted">Loading...</p>;
-  if (error && !model) return <main className="page"><div className="error-box">{error}</div></main>;
+  if (loading && !model) return <main className="page"><Loading /></main>;
+  if (error && !model) return <main className="page"><ErrorBox>{error}</ErrorBox></main>;
   if (!model) return null;
 
   return (
     <main className="page">
-      <p><Link to="/ml" className="btn-link">&larr; Back to registry</Link></p>
-      <div className="section-title" style={{ marginTop: 0 }}>
-        <h2>{model.name}</h2>
+      <Link to="/ml" className="back-link"><Icon name="back" /> Registry</Link>
+      <PageHeader kicker="Governance record" title={model.name} description={model.description || "No description provided."}>
         <RiskBadge riskTier={model.latestRiskTier} />
-      </div>
-      <p className="muted">{model.description}</p>
-      {model.useCase && <p className="muted">Use case: {model.useCase}</p>}
+      </PageHeader>
+      {model.useCase && (
+        <p className="use-case"><span className="kicker">Use case</span>{model.useCase}</p>
+      )}
 
-      {error && <div className="error-box">{error}</div>}
+      <ErrorBox>{error}</ErrorBox>
 
       {user.role === "ml_engineer" && (
         <>
-          <button onClick={() => setShowForm((s) => !s)} style={{ marginTop: "0.5rem" }}>
-            {showForm ? "Cancel" : "+ Upload New Version"}
+          <button onClick={() => setShowForm((s) => !s)} aria-expanded={showForm}>
+            {!showForm && <Icon name="plus" />}
+            {showForm ? "Cancel" : "Upload new version"}
           </button>
 
           {showForm && (
-            <form onSubmit={handleUpload} className="card" style={{ marginTop: "1rem" }}>
-              <label>
-                File type
-                <select value={fileType} onChange={(e) => setFileType(e.target.value)}>
-                  {FILE_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </label>
+            <form onSubmit={handleUpload} className="panel form-panel">
+              <h2>Upload a version</h2>
+              <fieldset className="segmented">
+                <legend>File type</legend>
+                {FILE_TYPES.map((t) => (
+                  <label key={t}>
+                    <input type="radio" name="fileType" value={t} checked={fileType === t} onChange={() => setFileType(t)} />
+                    <span>{t}</span>
+                  </label>
+                ))}
+              </fieldset>
 
               <label>
                 {fileType === "csv" ? "Predictions CSV" : "Model file (.pkl / .joblib)"}
-                <input
-                  type="file"
-                  required
-                  onChange={(e) => setFile(e.target.files[0])}
-                />
+                <input type="file" required onChange={(e) => setFile(e.target.files[0])} />
               </label>
 
               {fileType !== "csv" && (
                 <label>
-                  Companion dataset CSV (features + actual + protected_attribute)
+                  Companion dataset CSV
+                  <small className="hint">Features, actual and protected_attribute columns</small>
                   <input type="file" required onChange={(e) => setDatasetFile(e.target.files[0])} />
                 </label>
               )}
 
               {fileType === "csv" && (
                 <label>
-                  Self-reported latency (ms) -- no real inference happens for a CSV upload
+                  Self-reported latency (ms)
+                  <small className="hint">No real inference runs for a CSV upload, so latency is taken as reported</small>
                   <input
                     type="number"
                     step="0.01"
@@ -145,58 +147,56 @@ export default function ModelDetail() {
 
               <label>
                 Dataset notes
-                <textarea value={datasetNotes} onChange={(e) => setDatasetNotes(e.target.value)} />
+                <textarea rows={3} value={datasetNotes} onChange={(e) => setDatasetNotes(e.target.value)} />
               </label>
               <label>
                 Training notes
-                <textarea value={trainingNotes} onChange={(e) => setTrainingNotes(e.target.value)} />
+                <textarea rows={3} value={trainingNotes} onChange={(e) => setTrainingNotes(e.target.value)} />
               </label>
 
-              <button type="submit" disabled={uploading} aria-busy={uploading}>
-                Upload & Score
-              </button>
+              <div className="btn-row">
+                <button type="submit" disabled={uploading} aria-busy={uploading}>
+                  {uploading ? "Scoring…" : "Upload & score"}
+                </button>
+              </div>
             </form>
           )}
         </>
       )}
 
-      <h3 style={{ marginTop: "2rem" }}>Versions</h3>
-      {versions.length === 0 ? (
-        <p className="muted">No versions uploaded yet.</p>
-      ) : (
-        <table className="compact">
-          <thead>
-            <tr>
-              <th>Version</th>
-              <th>Status</th>
-              <th>Risk</th>
-              <th>Accuracy</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {versions.map((v) => (
-              <tr key={v._id} style={{ background: v._id === selectedVersionId ? "#F5F7F8" : "transparent" }}>
-                <td>v{v.versionNumber}</td>
-                <td><StatusBadge status={v.status} /></td>
-                <td><RiskBadge riskTier={v.riskTier} /></td>
-                <td>{v.metrics?.accuracy != null ? v.metrics.accuracy.toFixed(3) : "—"}</td>
-                <td>
-                  <button className="btn-link" onClick={() => setSelectedVersionId(v._id)}>
-                    View
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {selectedVersionId && (
-        <div style={{ marginTop: "1.5rem" }}>
-          <VersionDetail versionId={selectedVersionId} onChanged={() => setRefreshKey((k) => k + 1)} />
-        </div>
-      )}
+      <section className="section">
+        <div className="section-head"><h2>Versions</h2><span className="muted">{versions.length} registered</span></div>
+        {versions.length === 0 ? (
+          <div className="empty-state">No versions uploaded yet.</div>
+        ) : (
+          <div className="split">
+            <nav className="queue" aria-label="Versions">
+              {versions.map((v) => (
+                <button
+                  key={v._id}
+                  className={`queue-item${v._id === selectedVersionId ? " is-selected" : ""}`}
+                  aria-current={v._id === selectedVersionId ? "true" : undefined}
+                  onClick={() => setSelectedVersionId(v._id)}
+                >
+                  <span className="queue-top">
+                    <strong className="mono">v{v.versionNumber}</strong>
+                    <span className="mono muted">{v.metrics?.accuracy != null ? v.metrics.accuracy.toFixed(3) : "—"}</span>
+                  </span>
+                  <span className="queue-bottom">
+                    <StatusBadge status={v.status} />
+                    <RiskBadge riskTier={v.riskTier} />
+                  </span>
+                </button>
+              ))}
+            </nav>
+            <div className="split-detail">
+              {selectedVersionId && (
+                <VersionDetail versionId={selectedVersionId} onChanged={() => setRefreshKey((k) => k + 1)} />
+              )}
+            </div>
+          </div>
+        )}
+      </section>
     </main>
   );
 }

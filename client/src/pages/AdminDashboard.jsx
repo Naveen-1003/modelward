@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import api, { extractError } from "../api/axios.js";
-import RiskBadge from "../components/RiskBadge.jsx";
-import StatusBadge from "../components/StatusBadge.jsx";
+import ModelList from "../components/ModelList.jsx";
 import AuditLogTable from "../components/AuditLogTable.jsx";
+import { PageHeader, Loading, ErrorBox } from "../components/ui.jsx";
 
 const RISK_TIERS = ["low", "medium", "high", "unrated"];
 
@@ -28,64 +27,55 @@ export default function AdminDashboard() {
     return counts;
   }, [models]);
 
-  const pendingReview = useMemo(
-    () => models.filter((m) => m.latestVersionStatus === "submitted").length,
-    [models]
-  );
-  const deployed = useMemo(
-    () => models.filter((m) => m.latestVersionStatus === "deployed").length,
-    [models]
-  );
+  const pendingReview = models.filter((m) => m.latestVersionStatus === "submitted").length;
+  const deployed = models.filter((m) => m.latestVersionStatus === "deployed").length;
 
   return (
     <main className="page">
-      <h2>Governance Overview</h2>
-      {error && <div className="error-box">{error}</div>}
+      <PageHeader
+        kicker="Admin"
+        title="Governance overview"
+        description="Model risk, review status and deployment across the portfolio."
+      />
+      <ErrorBox>{error}</ErrorBox>
 
-      <div className="stat-row">
-        <div className="stat-tile">
-          <div className="stat-value">{models.length}</div>
-          <div className="stat-label">Total Models</div>
-        </div>
-        <div className="stat-tile">
-          <div className="stat-value">{pendingReview}</div>
-          <div className="stat-label">Pending Review</div>
-        </div>
-        <div className="stat-tile">
-          <div className="stat-value">{deployed}</div>
-          <div className="stat-label">Deployed</div>
-        </div>
-        {RISK_TIERS.map((tier) => (
-          <div className="stat-tile" key={tier}>
-            <div className="stat-value">{riskCounts[tier] || 0}</div>
-            <div className="stat-label">{tier} risk</div>
+      <section className="figures" aria-label="Summary">
+        <div><span className="mono">{models.length}</span>Models</div>
+        <div><span className="mono">{pendingReview}</span>Pending review</div>
+        <div><span className="mono">{deployed}</span>Deployed</div>
+      </section>
+
+      {models.length > 0 && (
+        <section className="section" aria-label="Risk distribution">
+          <div className="section-head"><h2>Risk distribution</h2></div>
+          <div className="riskbar" role="img" aria-label={RISK_TIERS.map((t) => `${riskCounts[t]} ${t}`).join(", ")}>
+            {RISK_TIERS.filter((t) => riskCounts[t] > 0).map((t) => (
+              <span key={t} className={`seg seg-${t}`} style={{ flexGrow: riskCounts[t] }} />
+            ))}
           </div>
-        ))}
-      </div>
-
-      <h3>All Models</h3>
-      {loading ? (
-        <p className="muted">Loading...</p>
-      ) : models.length === 0 ? (
-        <p className="muted">No models registered yet.</p>
-      ) : (
-        <div className="dashboard-grid">
-          {models.map((m) => (
-            <Link key={m._id} to={`/models/${m._id}`} className="card card-link">
-              <h3>{m.name}</h3>
-              <p className="muted">{m.useCase || "No use case noted"}</p>
-              <div className="metric-row">
-                <RiskBadge riskTier={m.latestRiskTier} />
-                {m.latestVersionStatus && <StatusBadge status={m.latestVersionStatus} />}
-              </div>
-            </Link>
-          ))}
-        </div>
+          <ul className="legend">
+            {RISK_TIERS.map((t) => (
+              <li key={t}>
+                <i className={`seg-${t}`} /> {t === "unrated" ? "Unrated" : `${t} risk`}
+                <b className="mono">{riskCounts[t]}</b>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
-      <div style={{ marginTop: "2.5rem" }}>
-        <AuditLogTable />
-      </div>
+      <section className="section">
+        <div className="section-head"><h2>All models</h2></div>
+        {loading ? (
+          <Loading />
+        ) : models.length === 0 ? (
+          <div className="empty-state">No models registered yet.</div>
+        ) : (
+          <ModelList models={models} />
+        )}
+      </section>
+
+      <AuditLogTable />
     </main>
   );
 }

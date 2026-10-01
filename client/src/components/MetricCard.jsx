@@ -9,20 +9,24 @@ export default function MetricCard({ metrics }) {
   if (!metrics || metrics.accuracy == null) {
     return <p className="muted">No metrics computed yet.</p>;
   }
+  const pct = Math.max(0, Math.min(1, Number(metrics.accuracy))) * 100;
   return (
-    <div className="metric-row">
-      <div className="metric-chip">
-        <strong>{fmt(metrics.accuracy)}</strong>
-        Accuracy
+    <dl className="metrics">
+      <div>
+        <dt>Accuracy</dt>
+        <dd className="mono">{fmt(metrics.accuracy)}</dd>
+        <div className="meter" aria-hidden="true"><span style={{ width: `${pct}%` }} /></div>
       </div>
-      <div className="metric-chip">
-        <strong>{fmt(metrics.fairnessGap)}</strong>
-        Fairness Gap
+      <div>
+        <dt>Fairness gap</dt>
+        <dd className="mono">{fmt(metrics.fairnessGap)}</dd>
+        <small>lower is better</small>
       </div>
-      <div className="metric-chip">
-        <strong>{metrics.latencyMs != null ? `${fmt(metrics.latencyMs, 2)} ms` : "—"}</strong>
-        Latency {metrics.computedBy === "self_reported" ? "(self-reported)" : "(measured)"}
+      <div>
+        <dt>Latency</dt>
+        <dd className="mono">{metrics.latencyMs != null ? `${fmt(metrics.latencyMs, 2)} ms` : "—"}</dd>
+        <small>{metrics.computedBy === "self_reported" ? "self-reported" : "measured"}</small>
       </div>
-    </div>
+    </dl>
   );
 }

@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import api, { extractError } from "../api/axios.js";
-import RiskBadge from "../components/RiskBadge.jsx";
-import StatusBadge from "../components/StatusBadge.jsx";
+import ModelList from "../components/ModelList.jsx";
 import AuditLogTable from "../components/AuditLogTable.jsx";
+import { Icon, PageHeader, Loading, ErrorBox } from "../components/ui.jsx";
 
 export default function MLDashboard() {
   const [models, setModels] = useState([]);
@@ -43,66 +42,57 @@ export default function MLDashboard() {
 
   return (
     <main className="page">
-      <div className="section-title">
-        <h2>Model Registry</h2>
-        <button onClick={() => setShowForm((s) => !s)}>
-          {showForm ? "Cancel" : "+ Register Model"}
+      <PageHeader
+        kicker="ML engineering"
+        title="Model registry"
+        description="Track versions, measured performance, and readiness for review."
+      >
+        <button onClick={() => setShowForm((s) => !s)} aria-expanded={showForm}>
+          {!showForm && <Icon name="plus" />}
+          {showForm ? "Cancel" : "Register model"}
         </button>
-      </div>
-      <p className="muted">
-        Risk tier is never chosen here -- it's computed automatically once a version is scored.
-      </p>
+      </PageHeader>
 
-      {error && <div className="error-box">{error}</div>}
+      <p className="note">Risk is calculated automatically. Upload a scored version to establish a model's tier.</p>
+
+      <ErrorBox>{error}</ErrorBox>
 
       {showForm && (
-        <form onSubmit={handleCreate} className="card" style={{ marginBottom: "1.5rem" }}>
+        <form onSubmit={handleCreate} className="panel form-panel">
+          <h2>Register a model</h2>
           <label>
             Name
-            <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </label>
-          <label>
-            Description
-            <textarea
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-            />
+            <input required autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </label>
           <label>
             Business use case
             <input value={form.useCase} onChange={(e) => setForm({ ...form, useCase: e.target.value })} />
           </label>
-          <button type="submit" disabled={creating} aria-busy={creating}>
-            Create
-          </button>
+          <label>
+            Description
+            <textarea
+              rows={3}
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+            />
+          </label>
+          <div className="btn-row">
+            <button type="submit" disabled={creating} aria-busy={creating}>
+              {creating ? "Creating…" : "Create model"}
+            </button>
+          </div>
         </form>
       )}
 
       {loading ? (
-        <p className="muted">Loading models...</p>
+        <Loading />
       ) : models.length === 0 ? (
-        <p className="muted">No models registered yet. Create one to get started.</p>
+        <div className="empty-state">No models registered yet. Register one to get started.</div>
       ) : (
-        <div className="dashboard-grid">
-          {models.map((m) => (
-            <Link key={m._id} to={`/models/${m._id}`} className="card card-link">
-              <h3>{m.name}</h3>
-              <p className="muted">{m.useCase || "No use case noted"}</p>
-              <div className="metric-row">
-                <RiskBadge riskTier={m.latestRiskTier} />
-                {m.latestVersionStatus && <StatusBadge status={m.latestVersionStatus} />}
-              </div>
-              <p className="muted">
-                {m.latestVersionNumber ? `Latest: v${m.latestVersionNumber}` : "No versions uploaded yet"}
-              </p>
-            </Link>
-          ))}
-        </div>
+        <ModelList models={models} />
       )}
 
-      <div style={{ marginTop: "2.5rem" }}>
-        <AuditLogTable refreshKey={refreshKey} />
-      </div>
+      <AuditLogTable refreshKey={refreshKey} />
     </main>
   );
 }
