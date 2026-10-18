@@ -168,16 +168,6 @@ export default function UsersTab() {
     [toast]
   );
 
-  async function changeRole(u, newRole) {
-    if (newRole === u.role) return;
-    const ok = await confirm({
-      title: "Change role?",
-      message: `${u.name} will become ${roleLabel(newRole)} and see that role's pages on their next request.`,
-      confirmLabel: "Change role",
-    });
-    if (ok) patchUser(u, { role: newRole }, `${u.name} is now ${roleLabel(newRole)}.`);
-  }
-
   async function toggleActive(u) {
     const deactivating = u.isActive !== false;
     const ok = await confirm({
@@ -256,27 +246,14 @@ export default function UsersTab() {
                   const isSelf = me && u.id === me.id;
                   const busy = busyId === u.id;
                   const active = u.isActive !== false;
-                  const lockTip = isSelf ? "You can't change your own role or deactivate yourself" : undefined;
+                  const lockTip = isSelf ? "You can't deactivate yourself" : undefined;
                   return (
                     <tr key={u.id}>
                       <td>
                         {u.name}{isSelf && <span className="muted"> (you)</span>}
                         <span className="sub" style={{ textTransform: "none" }}>{u.email}</span>
                       </td>
-                      <td>
-                        <div className="cell-actions" title={lockTip}>
-                          <select
-                            value={u.role}
-                            onChange={(e) => changeRole(u, e.target.value)}
-                            disabled={isSelf || busy}
-                            aria-label={`Role for ${u.name}`}
-                          >
-                            {ROLES.map((r) => (
-                              <option key={r} value={r}>{roleLabel(r)}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </td>
+                      <td>{roleLabel(u.role)}</td>
                       <td>{active ? <span className="badge badge-status-approved">Active</span> : <span className="badge badge-muted">Inactive</span>}</td>
                       <td className="mono muted nowrap">{formatDate(u.createdAt)}</td>
                       <td className="num">

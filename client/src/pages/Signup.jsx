@@ -10,7 +10,6 @@ import AuthAside, { AuthLoading } from "./AuthAside.jsx";
 const ROLES = [
   { value: "ml_engineer", label: "ML Engineer", note: "Register models, upload versions" },
   { value: "compliance_officer", label: "Compliance Officer", note: "Review, approve and deploy" },
-  { value: "admin", label: "Admin", note: "Portfolio overview and deploys" },
 ];
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
