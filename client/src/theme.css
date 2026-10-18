@@ -281,8 +281,8 @@ legend { padding: 0; margin-bottom: 0.45rem; font-size: 0.85rem; font-weight: 50
 .lifecycle .bad { color: var(--bad); font-weight: 600; }
 .lifecycle .bad .dot { border-color: var(--bad); color: var(--bad); }
 
-.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 1.25rem; }
-.metrics > div { background: var(--raised); padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.2rem; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 1.25rem; }
+.metrics > div { outline: 1px solid var(--line); padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.2rem; }
 .metrics dt { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
 .metrics dd { font-size: 1.6rem; line-height: 1.2; }
 .metrics small { color: var(--ink-3); font-size: 0.75rem; }
@@ -318,6 +318,9 @@ legend { padding: 0; margin-bottom: 0.45rem; font-size: 0.85rem; font-weight: 50
    Tables
    ========================================================================== */
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+/* long logs scroll inside the card instead of stretching the page */
+.table-wrap.scroll { max-height: 520px; overflow: auto; }
+.table-wrap.scroll th { position: sticky; top: 0; z-index: 1; }
 table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
 th { text-align: left; padding: 0.6rem 0.9rem; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--line-strong); background: var(--bg); }
 td { padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--line); vertical-align: top; }

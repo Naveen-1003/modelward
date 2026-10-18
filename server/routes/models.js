@@ -4,6 +4,7 @@ const Version = require("../models/Version");
 const authGuard = require("../middleware/auth");
 const roleGuard = require("../middleware/role");
 const writeAuditLog = require("../middleware/audit");
+const validId = require("../middleware/validId");
 
 const router = express.Router();
 
@@ -23,9 +24,12 @@ async function annotateWithLatestRiskTier(modelDoc) {
   };
 }
 
+router.param("id", validId);
+
 router.post("/", authGuard, roleGuard(["ml_engineer", "admin"]), async (req, res) => {
   try {
-    const { name, description, useCase } = req.body;
+    const { description, useCase } = req.body;
+    const name = typeof req.body.name === "string" ? req.body.name.trim() : "";
     if (!name) return res.status(400).json({ error: "name is required" });
     if ("riskTier" in req.body) {
       return res.status(400).json({ error: "riskTier is not accepted at creation -- it is computed per version" });

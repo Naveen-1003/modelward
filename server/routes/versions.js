@@ -6,6 +6,7 @@ const MetricSnapshot = require("../models/MetricSnapshot");
 const authGuard = require("../middleware/auth");
 const roleGuard = require("../middleware/role");
 const writeAuditLog = require("../middleware/audit");
+const validId = require("../middleware/validId");
 const upload = require("../middleware/upload");
 const computeMetrics = require("../utils/metricsClient");
 const computeRiskTier = require("../utils/riskTier");
@@ -13,6 +14,8 @@ const scoreCompliance = require("../utils/compliance");
 const nextSnapshot = require("../utils/drift");
 
 const router = express.Router();
+router.param("id", validId);
+router.param("modelId", validId);
 
 const FILE_TYPES = ["csv", "pickle", "joblib"];
 

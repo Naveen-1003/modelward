@@ -15,9 +15,13 @@ function signToken(user) {
 // MVP shortcut: role is chosen by the user at signup, no invite/approval flow.
 router.post("/signup", async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
-    if (!name || !email || !password || !role) {
+    const { email, password, role } = req.body;
+    const name = typeof req.body.name === "string" ? req.body.name.trim() : "";
+    if (!name || typeof email !== "string" || !email.trim() || typeof password !== "string" || !role) {
       return res.status(400).json({ error: "name, email, password and role are all required" });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: "password must be at least 6 characters" });
     }
     const allowedRoles = ["admin", "ml_engineer", "compliance_officer"];
     if (!allowedRoles.includes(role)) {

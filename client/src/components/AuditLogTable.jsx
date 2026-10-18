@@ -52,7 +52,7 @@ export default function AuditLogTable({ limit = 50, refreshKey }) {
       ) : logs.length === 0 ? (
         <div className="empty-state">No activity yet.</div>
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap scroll">
           <table className="audit-table">
             <thead>
               <tr>
