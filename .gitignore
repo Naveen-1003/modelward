@@ -36,3 +36,20 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# ---- Env files: ignore real ones, keep the templates ----
+.env.*
+!.env.example
+!**/.env.example
+
+# ---- Test coverage output ----
+coverage/
+.nyc_output/
+htmlcov/
+.coverage
+
+# ---- More logs ----
+*.log
+
+# ---- Render local tooling ----
+.render/

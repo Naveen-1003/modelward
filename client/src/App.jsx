@@ -12,6 +12,7 @@ import MLDashboard from "./pages/MLDashboard.jsx";
 import ModelDetail from "./pages/ModelDetail.jsx";
 import ComplianceDashboard from "./pages/ComplianceDashboard.jsx";
 import AdminDashboard from "./pages/AdminDashboard.jsx";
+import VersionReport from "./pages/VersionReport.jsx";
 
 function Home() {
   const { user, loading } = useAuth();
@@ -59,6 +60,15 @@ export default function App() {
           element={
             <ProtectedRoute roles={["admin"]}>
               <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/report/versions/:id"
+          element={
+            <ProtectedRoute>
+              <VersionReport />
             </ProtectedRoute>
           }
         />

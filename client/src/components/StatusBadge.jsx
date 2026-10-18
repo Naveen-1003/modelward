@@ -1,14 +1,20 @@
 import React from "react";
 
-const LABELS = {
+export const STATUS_LABELS = {
   draft: "Draft",
-  submitted: "Submitted",
+  submitted: "In review",
+  changes_requested: "Changes requested",
   approved: "Approved",
   rejected: "Rejected",
   deployed: "Deployed",
-  upload_failed: "Upload Failed",
+  needs_review: "Needs review",
+  superseded: "Superseded",
+  retired: "Retired",
+  upload_failed: "Upload failed",
 };
 
 export default function StatusBadge({ status }) {
-  return <span className={`badge badge-status-${status}`}>{LABELS[status] || status}</span>;
+  if (!status) return null;
+  const label = STATUS_LABELS[status] || String(status).replace(/_/g, " ");
+  return <span className={`badge badge-status-${status}`}>{label}</span>;
 }

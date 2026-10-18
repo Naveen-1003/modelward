@@ -1,10 +1,17 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import api, { extractError } from "../api/axios.js";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useConfig } from "../context/ConfigContext.jsx";
+import { useToast } from "../context/ToastContext.jsx";
+import { useConfirm } from "./ConfirmDialog.jsx";
 import StatusBadge from "./StatusBadge.jsx";
 import RiskBadge from "./RiskBadge.jsx";
 import MetricCard from "./MetricCard.jsx";
+import CommentThread from "./CommentThread.jsx";
+import MonitoringPanel from "./MonitoringPanel.jsx";
+import DownloadButton from "./DownloadButton.jsx";
 import { Icon, Loading, ErrorBox } from "./ui.jsx";
+import { LIVE_STATUSES, MAX_COMMENT, MAX_NOTES, fmt, fmtDateTime, useMounted } from "./featureUtils.js";
 
 const STEPS = [
   { key: "draft", label: "Draft" },
@@ -13,16 +20,30 @@ const STEPS = [
   { key: "deployed", label: "Deployed" },
 ];
 
+// Where each status sits on the stepper, and how that step should look.
+const POSITION = {
+  draft: { at: 0, kind: "now" },
+  upload_failed: { at: 0, kind: "bad", label: "Upload failed" },
+  submitted: { at: 1, kind: "now" },
+  changes_requested: { at: 1, kind: "warn", label: "Changes requested" },
+  rejected: { at: 1, kind: "bad", label: "Rejected" },
+  approved: { at: 2, kind: "now" },
+  deployed: { at: 3, kind: "now" },
+  needs_review: { at: 3, kind: "warn", label: "Needs review" },
+  superseded: { at: 4, kind: "ended", label: "Superseded" },
+  retired: { at: 4, kind: "ended", label: "Retired" },
+};
+
 function Lifecycle({ status }) {
-  const failed = status === "rejected" || status === "upload_failed";
-  const current = status === "rejected" ? 1 : status === "upload_failed" ? 0 : STEPS.findIndex((s) => s.key === status);
+  const pos = POSITION[status] || { at: 0, kind: "now" };
+  const steps = pos.kind === "ended" ? [...STEPS, { key: status, label: pos.label }] : STEPS;
   return (
     <ol className="lifecycle" aria-label="Version lifecycle">
-      {STEPS.map((s, i) => {
-        const state = i < current ? "done" : i === current ? (failed ? "bad" : "now") : "";
-        const label = i === current && failed ? (status === "rejected" ? "Rejected" : "Upload failed") : s.label;
+      {steps.map((s, i) => {
+        const state = i < pos.at ? "done" : i === pos.at ? pos.kind : "";
+        const label = i === pos.at && pos.label ? pos.label : s.label;
         return (
-          <li key={s.key} className={state} aria-current={i === current ? "step" : undefined}>
+          <li key={s.key} className={state} aria-current={i === pos.at ? "step" : undefined}>
             <span className="dot">{state === "done" ? <Icon name="check" size={11} /> : i + 1}</span>
             {label}
           </li>
@@ -32,54 +53,233 @@ function Lifecycle({ status }) {
   );
 }
 
-export default function VersionDetail({ versionId, onChanged }) {
-  const { user } = useAuth();
-  const [data, setData] = useState(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [comment, setComment] = useState("");
+const CLONEABLE = ["rejected", "changes_requested", "upload_failed", "superseded", "retired"];
+const ARCHIVABLE = ["draft", "changes_requested", "rejected", "upload_failed", "superseded", "retired"];
+const SOURCE_LABEL = { baseline: "Baseline", simulated: "Simulated", batch: "Batch upload" };
 
-  function load() {
-    setLoading(true);
-    setError("");
-    api
-      .get(`/versions/${versionId}`)
-      .then(({ data }) => setData(data))
-      .catch((err) => setError(extractError(err)))
-      .finally(() => setLoading(false));
-  }
+export default function VersionDetail({ versionId, onChanged, onClone }) {
+  const { user } = useAuth();
+  const { config } = useConfig();
+  const toast = useToast();
+  const confirm = useConfirm();
+  const mounted = useMounted();
+
+  const reqId = useRef(0);
+  const busyRef = useRef("");
+  const idRef = useRef(versionId);
+  idRef.current = versionId;
+
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [gone, setGone] = useState("");
+  const [comment, setComment] = useState("");
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [notesDraft, setNotesDraft] = useState({ datasetNotes: "", trainingNotes: "" });
+
+  const load = useCallback(
+    async (silent = false) => {
+      const id = ++reqId.current;
+      if (!silent) {
+        setLoading(true);
+        setLoadError("");
+      }
+      try {
+        const res = await api.get(`/versions/${versionId}`);
+        if (id === reqId.current) {
+          setData(res.data);
+          setLoadError("");
+        }
+      } catch (err) {
+        if (id === reqId.current) setLoadError(extractError(err));
+      } finally {
+        if (id === reqId.current) setLoading(false);
+      }
+    },
+    [versionId]
+  );
 
   useEffect(() => {
-    setData(null); // never show another version's actions while the new one loads
+    // never show another version's actions while the new one loads
+    setData(null);
     setComment("");
+    setGone("");
+    setActionError("");
+    setEditingNotes(false);
     load();
-  }, [versionId]);
+    return () => {
+      reqId.current += 1; // ignore responses that arrive after a switch/unmount
+    };
+  }, [load]);
 
-  async function runAction(fn) {
-    setBusy(true);
-    setError("");
+  // One helper for every mutation: single-flight, toast, reload, tell the parent.
+  async function runAction(key, fn, successMsg, opts = {}) {
+    if (busyRef.current) return { ok: false };
+    busyRef.current = key;
+    setBusy(key);
+    setActionError("");
+    const startId = idRef.current;
     try {
-      await fn();
-      load();
+      const result = await fn();
+      const msg = typeof successMsg === "function" ? successMsg(result) : successMsg;
+      if (msg) toast.success(msg);
+      if (mounted.current && idRef.current === startId && opts.reload !== false) await load(true);
       onChanged?.();
+      return { ok: true, result };
     } catch (err) {
-      setError(extractError(err));
+      const msg = extractError(err);
+      toast.error(msg);
+      if (mounted.current && idRef.current === startId) {
+        setActionError(msg);
+        load(true); // the state may have moved under us; refresh the action matrix
+      }
+      return { ok: false };
     } finally {
-      setBusy(false);
+      busyRef.current = "";
+      if (mounted.current) setBusy("");
     }
   }
 
+  if (gone) return <div className="empty-state" role="status">{gone}</div>;
   if (loading && !data) return <Loading rows={4} />;
-  if (error && !data) return <ErrorBox>{error}</ErrorBox>;
-  if (!data) return null;
+  if (!data) return loadError ? <ErrorBox>{loadError}</ErrorBox> : null;
 
   const { version, compliance, snapshots } = data;
-  const isHighRisk = version.riskTier === "high";
-  const canReview = user.role === "compliance_officer" && version.status === "submitted";
-  const canDeploy = ["compliance_officer", "admin"].includes(user.role) && version.status === "approved";
-  const canSubmit = user.role === "ml_engineer" && version.status === "draft";
-  const canDrift = version.status === "deployed";
+  const role = user?.role;
+  const isML = role === "ml_engineer";
+  const isCompliance = role === "compliance_officer";
+  const isAdmin = role === "admin";
+  const canDecide = isCompliance || isAdmin; // deploy / retire / resolve review
+  const isOwner = !!user && version.createdBy === user.id;
+  const status = version.status;
+  const isLive = LIVE_STATUSES.includes(status);
+  // Mirrors the server: an unrated/unknown tier is treated as high.
+  const isHighRisk = !["low", "medium"].includes(version.riskTier);
+  const modelName = version.modelId?.name;
+  const working = busy !== "";
+
+  // Mirrors the server: only the engineer who uploaded a version may edit, submit, withdraw or retry it.
+  const ownsML = isML && isOwner;
+  const canSubmit = ownsML && (status === "draft" || status === "changes_requested");
+  const canWithdraw = ownsML && status === "submitted";
+  const canRetry = ownsML && status === "upload_failed" && version.retryable && version.hasFile;
+  const canEditNotes = ownsML && (status === "draft" || status === "changes_requested");
+  const canClone = isML && !!onClone && CLONEABLE.includes(status);
+  const canArchive = ((isML && isOwner) || isAdmin) && ARCHIVABLE.includes(status);
+  const canReview = isCompliance && status === "submitted";
+  const canDeploy = canDecide && status === "approved";
+  const canRetire = canDecide && status === "deployed";
+  const canResolve = canDecide && status === "needs_review";
+  const canSimulate = config.enableDriftSimulation && isLive;
+  const hasNotes = !!(version.datasetNotes || version.trainingNotes);
+
+  // Server rule: comment required for reject / request changes, and for approving a high-risk version.
+  const trimmed = comment.trim();
+  const approveNeedsComment = isHighRisk;
+  const approveBlocked = approveNeedsComment && !trimmed;
+  const otherBlocked = !trimmed;
+  const hint = !trimmed
+    ? approveNeedsComment
+      ? "A comment is required to approve a high-risk version, and to reject or request changes."
+      : "A comment is required to reject or request changes."
+    : "";
+
+  const id = version._id || versionId;
+  const post = (path, body) => api.post(`/versions/${id}/${path}`, body);
+
+  async function review(decision) {
+    const labels = { approve: "Version approved", reject: "Version rejected", request_changes: "Changes requested" };
+    const res = await runAction("review", () => post("review", { decision, ...(trimmed ? { comment: trimmed } : {}) }), labels[decision]);
+    if (res.ok && mounted.current) setComment("");
+  }
+
+  async function deploy() {
+    const ok = await confirm({
+      title: `Deploy version ${version.versionNumber}?`,
+      message: "Any other live version of this model will be marked superseded.",
+      confirmLabel: "Deploy",
+    });
+    if (!ok) return;
+    runAction("deploy", () => post("deploy"), "Version deployed");
+  }
+
+  async function retire() {
+    const reason = await confirm({
+      title: `Retire version ${version.versionNumber}?`,
+      message: "The version stops being live. This is recorded in the audit trail.",
+      confirmLabel: "Retire",
+      danger: true,
+      requireReason: true,
+      reasonLabel: "Reason for retiring",
+    });
+    if (!reason) return;
+    runAction("retire", () => post("retire", { comment: reason }), "Version retired");
+  }
+
+  async function resolveReview(decision) {
+    const keep = decision === "keep";
+    const reason = await confirm({
+      title: keep ? "Keep this version live?" : `Retire version ${version.versionNumber}?`,
+      message: keep
+        ? "You are accepting the drift. The version returns to Deployed and your decision is recorded."
+        : "The drifted version stops being live. This is recorded in the audit trail.",
+      confirmLabel: keep ? "Keep live" : "Retire",
+      danger: !keep,
+      requireReason: true,
+      reasonLabel: "Your decision comment",
+    });
+    if (!reason) return;
+    runAction("resolve", () => post("resolve-review", { decision, comment: reason }), keep ? "Kept live" : "Version retired");
+  }
+
+  async function archive() {
+    const ok = await confirm({
+      title: `Archive version ${version.versionNumber}?`,
+      message: "It disappears from the version list. An admin can restore it from Trash.",
+      confirmLabel: "Archive",
+      danger: true,
+      requireReason: false,
+    });
+    if (!ok) return;
+    const res = await runAction(
+      "archive",
+      () => api.delete(`/versions/${id}`),
+      "Version archived",
+      { reload: false }
+    );
+    if (res.ok && mounted.current) {
+      reqId.current += 1; // the version is gone; discard any pending reads
+      setGone("This version was archived.");
+    }
+  }
+
+  function startEditNotes() {
+    setNotesDraft({ datasetNotes: version.datasetNotes || "", trainingNotes: version.trainingNotes || "" });
+    setEditingNotes(true);
+  }
+
+  async function saveNotes(e) {
+    e.preventDefault();
+    const res = await runAction(
+      "notes",
+      () => api.patch(`/versions/${id}/notes`, notesDraft),
+      "Notes saved"
+    );
+    if (res.ok && mounted.current) setEditingNotes(false);
+  }
+
+  const driftMsg = (r) => {
+    const d = r?.data || {};
+    if (d.escalated) return "Snapshot added — risk tier escalated and drift flagged";
+    if (d.snapshot?.flagged) return "Snapshot added — drift flagged";
+    return "Snapshot added — within tolerance";
+  };
+
+  const tierChanged = version.initialRiskTier && version.initialRiskTier !== version.riskTier;
+  const th = version.thresholdsUsed;
+  const checks = Array.isArray(compliance?.checks) ? compliance.checks : null;
 
   return (
     <article className="panel version-panel" aria-busy={loading}>
@@ -87,114 +287,289 @@ export default function VersionDetail({ versionId, onChanged }) {
         <div>
           <h2>Version {version.versionNumber}</h2>
           <p className="muted mono small">
-            {version.fileType} · uploaded {new Date(version.createdAt).toLocaleString()}
+            {modelName ? `${modelName} · ` : ""}
+            {version.fileType} · uploaded {fmtDateTime(version.createdAt)}
+            {version.createdByName ? ` by ${version.createdByName}` : ""}
           </p>
         </div>
         <div className="badge-row">
-          <StatusBadge status={version.status} />
-          <RiskBadge riskTier={version.riskTier} />
+          <StatusBadge status={status} />
+          {tierChanged ? (
+            <span className="tier-shift" title="Risk tier at upload, then as re-evaluated on the latest snapshot">
+              <span className="kicker">Tier</span>
+              <RiskBadge riskTier={version.initialRiskTier} />
+              <span aria-label="changed to">→</span>
+              <RiskBadge riskTier={version.riskTier} />
+            </span>
+          ) : (
+            <RiskBadge riskTier={version.riskTier} />
+          )}
         </div>
       </div>
 
-      <Lifecycle status={version.status} />
+      <Lifecycle status={status} />
 
-      {version.status === "upload_failed" && (
-        <ErrorBox>Upload failed: {version.uploadError}</ErrorBox>
+      {status === "needs_review" && (
+        <section className="banner banner-warn" aria-label="Drift review required">
+          <div className="banner-main">
+            <Icon name="alert" size={20} />
+            <div>
+              <strong>Drift flagged — this version needs a compliance decision</strong>
+              <p className="small">
+                Monitoring found this live version moved outside its tolerance. Keep it live or retire it; either choice needs a comment and is
+                recorded in the audit trail.
+              </p>
+              {!canResolve && <p className="small muted">Only a compliance officer or admin can resolve this.</p>}
+            </div>
+          </div>
+          {canResolve && (
+            <div className="btn-row">
+              <button type="button" disabled={working} aria-busy={busy === "resolve"} onClick={() => resolveReview("keep")}>
+                Keep live
+              </button>
+              <button type="button" className="danger" disabled={working} onClick={() => resolveReview("retire")}>
+                Retire
+              </button>
+            </div>
+          )}
+        </section>
       )}
 
-      <MetricCard metrics={version.metrics} />
+      {status === "upload_failed" && (
+        <ErrorBox>
+          Upload failed: {version.uploadError || "scoring did not complete"}
+          {version.retryable && !version.hasFile ? " (the file was not retained, so scoring can't be retried)" : ""}
+        </ErrorBox>
+      )}
+
+      <MetricCard metrics={version.metrics} scoringWarnings={version.scoringWarnings} />
+
+      {th && (
+        <details className="notes thresholds">
+          <summary>Scored under thresholds</summary>
+          <dl className="kv">
+            <div><dt>Low risk</dt><dd className="mono">accuracy ≥ {fmt(th.lowAccuracy, 2)}, gap ≤ {fmt(th.lowFairnessGap, 2)}</dd></div>
+            <div><dt>Medium risk</dt><dd className="mono">accuracy ≥ {fmt(th.mediumAccuracy, 2)}, gap ≤ {fmt(th.mediumFairnessGap, 2)}</dd></div>
+            <div><dt>Drift tolerance</dt><dd className="mono">± {fmt(th.driftThreshold, 2)}</dd></div>
+          </dl>
+          <p className="small muted">Anything outside the medium limits is high risk. Admins can change thresholds; this version keeps the ones it was scored under.</p>
+        </details>
+      )}
 
       {compliance && (
         <div className="compliance">
           <span className="score mono">{compliance.score}%</span>
           <div>
             <strong>Compliance score</strong>
-            <span className="muted"> Required: {compliance.required.join(", ") || "none"}</span>
-            <div className="meter" aria-hidden="true"><span style={{ width: `${compliance.score}%` }} /></div>
+            {checks ? (
+              <ul className="check-list">
+                {checks.map((c) => (
+                  <li key={c.key} className={c.passed ? "pass" : "fail"}>
+                    <Icon name={c.passed ? "check" : "close"} size={14} />
+                    <span className="sr-only">{c.passed ? "Met: " : "Not met: "}</span>
+                    {c.label}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span className="muted"> Required: {(compliance.required || []).join(", ") || "none"}</span>
+            )}
+            <div className="meter" aria-hidden="true"><span style={{ width: `${Number(compliance.score) || 0}%` }} /></div>
           </div>
         </div>
       )}
 
-      {(version.datasetNotes || version.trainingNotes) && (
-        <details className="notes">
-          <summary>Dataset &amp; training notes</summary>
-          {version.datasetNotes && <p><strong>Dataset:</strong> {version.datasetNotes}</p>}
-          {version.trainingNotes && <p><strong>Training:</strong> {version.trainingNotes}</p>}
-        </details>
-      )}
+      {(hasNotes || canEditNotes) &&
+        (editingNotes ? (
+          <form className="notes-edit" onSubmit={saveNotes}>
+            <label>
+              Dataset notes
+              <textarea
+                rows={3}
+                maxLength={MAX_NOTES}
+                value={notesDraft.datasetNotes}
+                onChange={(e) => setNotesDraft({ ...notesDraft, datasetNotes: e.target.value })}
+              />
+              <span className="hint mono">{notesDraft.datasetNotes.length}/{MAX_NOTES}</span>
+            </label>
+            <label>
+              Training notes
+              <textarea
+                rows={3}
+                maxLength={MAX_NOTES}
+                value={notesDraft.trainingNotes}
+                onChange={(e) => setNotesDraft({ ...notesDraft, trainingNotes: e.target.value })}
+              />
+              <span className="hint mono">{notesDraft.trainingNotes.length}/{MAX_NOTES}</span>
+            </label>
+            <div className="btn-row">
+              <button type="submit" disabled={working} aria-busy={busy === "notes"}>Save notes</button>
+              <button type="button" className="secondary" disabled={working} onClick={() => setEditingNotes(false)}>Cancel</button>
+            </div>
+          </form>
+        ) : (
+          <details className="notes" open={canEditNotes && hasNotes ? true : undefined}>
+            <summary>Dataset &amp; training notes</summary>
+            {version.datasetNotes && <p className="pre"><strong>Dataset:</strong> {version.datasetNotes}</p>}
+            {version.trainingNotes && <p className="pre"><strong>Training:</strong> {version.trainingNotes}</p>}
+            {!hasNotes && <p className="muted">No notes yet.</p>}
+            {canEditNotes && (
+              <button type="button" className="secondary" disabled={working} onClick={startEditNotes}>Edit notes</button>
+            )}
+          </details>
+        ))}
 
       {version.reviewComment && (
         <blockquote className="review-comment">
           <span className="kicker">Reviewer comment</span>
-          {version.reviewComment}
+          <span className="pre">{version.reviewComment}</span>
         </blockquote>
       )}
 
-      <ErrorBox>{error}</ErrorBox>
+      <ErrorBox>{actionError || loadError}</ErrorBox>
 
-      {/* ML Engineer: submit a draft for review */}
-      {canSubmit && (
+      {/* ML engineer: lifecycle actions on their own versions */}
+      {(canSubmit || canWithdraw || canRetry || canClone || canArchive) && (
         <div className="action-bar">
-          <button disabled={busy} onClick={() => runAction(() => api.post(`/versions/${versionId}/submit`))}>
-            Submit for review
-          </button>
+          <div className="btn-row">
+            {canSubmit && (
+              <button type="button" disabled={working} aria-busy={busy === "submit"} onClick={() => runAction("submit", () => post("submit"), "Submitted for review")}>
+                Submit for review
+              </button>
+            )}
+            {canWithdraw && (
+              <button type="button" className="secondary" disabled={working} aria-busy={busy === "withdraw"} onClick={() => runAction("withdraw", () => post("withdraw"), "Withdrawn to draft")}>
+                Withdraw to draft
+              </button>
+            )}
+            {canRetry && (
+              <button
+                type="button"
+                disabled={working}
+                aria-busy={busy === "retry"}
+                onClick={() =>
+                  runAction("retry", () => post("retry"), (r) =>
+                    r?.data?.version?.status === "upload_failed" ? "Scoring retried — it failed again, see the error above" : "Scoring retried"
+                  )
+                }
+              >
+                <Icon name="refresh" /> Retry scoring
+              </button>
+            )}
+            {canClone && (
+              <button type="button" className="secondary" disabled={working} onClick={() => onClone(version)}>
+                Clone as new version
+              </button>
+            )}
+            {canArchive && (
+              <button type="button" className="danger" disabled={working} aria-busy={busy === "archive"} onClick={archive}>
+                <Icon name="trash" /> Archive
+              </button>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Compliance Officer: approve/reject a submitted version */}
+      {/* Compliance officer: decide on a submitted version */}
       {canReview && (
         <div className="action-bar review">
           <label>
-            Reviewer comment {isHighRisk && <strong className="req">Required for high-risk versions</strong>}
-            <textarea rows={3} value={comment} onChange={(e) => setComment(e.target.value)} />
+            Reviewer comment{" "}
+            {isHighRisk ? <strong className="req">Required for high-risk versions</strong> : <span className="hint">Required to reject or request changes</span>}
+            <textarea
+              rows={3}
+              value={comment}
+              maxLength={MAX_COMMENT}
+              onChange={(e) => setComment(e.target.value)}
+              aria-describedby={`rv-hint-${id}`}
+            />
           </label>
+          <div className="form-foot">
+            <span id={`rv-hint-${id}`} className="hint" aria-live="polite">{hint}</span>
+            <span className="hint mono">{comment.length}/{MAX_COMMENT}</span>
+          </div>
           <div className="btn-row">
-            <button
-              disabled={busy}
-              onClick={() =>
-                runAction(() =>
-                  api.post(`/versions/${versionId}/review`, { decision: "approve", comment })
-                )
-              }
-            >
+            <button type="button" disabled={working || approveBlocked} aria-busy={busy === "review"} onClick={() => review("approve")}>
               Approve
             </button>
-            <button
-              className="danger"
-              disabled={busy}
-              onClick={() =>
-                runAction(() =>
-                  api.post(`/versions/${versionId}/review`, { decision: "reject", comment })
-                )
-              }
-            >
+            <button type="button" className="secondary" disabled={working || otherBlocked} onClick={() => review("request_changes")}>
+              Request changes
+            </button>
+            <button type="button" className="danger" disabled={working || otherBlocked} onClick={() => review("reject")}>
               Reject
             </button>
           </div>
         </div>
       )}
 
-      {/* Compliance Officer or Admin: deploy an approved version */}
-      {canDeploy && (
+      {/* Compliance officer or admin: deploy / retire */}
+      {(canDeploy || canRetire) && (
         <div className="action-bar">
-          <button disabled={busy} onClick={() => runAction(() => api.post(`/versions/${versionId}/deploy`))}>
-            Deploy
-          </button>
+          <div className="btn-row">
+            {canDeploy && (
+              <button type="button" disabled={working} aria-busy={busy === "deploy"} onClick={deploy}>
+                Deploy
+              </button>
+            )}
+            {canRetire && (
+              <button type="button" className="danger" disabled={working} aria-busy={busy === "retire"} onClick={retire}>
+                Retire
+              </button>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Any role: simulate drift on a deployed version (deliberately open, see build plan) */}
-      {canDrift && (
-        <div className="action-bar">
-          <button
-            className="secondary"
-            disabled={busy}
-            onClick={() => runAction(() => api.post(`/versions/${versionId}/simulate-drift`))}
-          >
-            Simulate next snapshot
-          </button>
+      {/* Any role: monitoring on live versions */}
+      {isLive && (
+        <div className="action-bar monitoring">
+          <div className="btn-row">
+            {canSimulate && (
+              <button
+                type="button"
+                className="secondary"
+                disabled={working}
+                aria-busy={busy === "simulate"}
+                title="Generates a synthetic snapshot for demos; it is not real monitoring data"
+                onClick={() => runAction("simulate", () => post("simulate-drift"), driftMsg)}
+              >
+                Simulate drift (demo)
+              </button>
+            )}
+          </div>
+          <MonitoringPanel versionId={id} run={runAction} disabled={working} />
         </div>
       )}
+
+      {/* Files and report: every role */}
+      <div className="action-bar">
+        <div className="btn-row">
+          {version.hasFile && (
+            <DownloadButton
+              url={`/versions/${id}/file`}
+              params={{ which: "model" }}
+              fileName={version.fileName}
+              fallbackName={`version-${version.versionNumber}-${version.fileType}`}
+              label={version.fileType === "csv" ? "Download predictions CSV" : "Download model file"}
+            />
+          )}
+          {version.hasDataset && (
+            <DownloadButton
+              url={`/versions/${id}/file`}
+              params={{ which: "dataset" }}
+              fileName={version.datasetFileName}
+              fallbackName={`version-${version.versionNumber}-dataset.csv`}
+              label="Download dataset"
+            />
+          )}
+          <a className="btn-link secondary" href={`/report/versions/${id}`} target="_blank" rel="noopener noreferrer">
+            <Icon name="print" /> Open printable report
+          </a>
+        </div>
+        {!version.hasFile && !version.hasDataset && (
+          <p className="small muted">Source files were not retained for this version.</p>
+        )}
+      </div>
 
       {snapshots && snapshots.length > 0 && (
         <section className="section">
@@ -204,17 +579,26 @@ export default function VersionDetail({ versionId, onChanged }) {
               <thead>
                 <tr>
                   <th>When</th>
+                  <th>Source</th>
                   <th className="num">Accuracy</th>
+                  <th className="num">Fairness gap</th>
                   <th className="num">Drift Δ</th>
+                  <th>Tier</th>
                   <th>Flagged</th>
                 </tr>
               </thead>
               <tbody>
                 {snapshots.map((s) => (
                   <tr key={s._id}>
-                    <td className="muted mono nowrap">{new Date(s.createdAt).toLocaleString()}</td>
-                    <td className="num mono">{Number(s.accuracy).toFixed(3)}</td>
-                    <td className="num mono">{Number(s.driftDelta).toFixed(3)}</td>
+                    <td className="muted mono nowrap">{fmtDateTime(s.createdAt)}</td>
+                    <td className="nowrap">
+                      {SOURCE_LABEL[s.source] || (s.isBaseline ? "Baseline" : s.source || "—")}
+                      {s.createdByName && <span className="sub">{s.createdByName}</span>}
+                    </td>
+                    <td className="num mono">{fmt(s.accuracy)}</td>
+                    <td className="num mono">{fmt(s.fairnessGap)}</td>
+                    <td className="num mono">{fmt(s.driftDelta)}</td>
+                    <td>{s.riskTier ? <RiskBadge riskTier={s.riskTier} /> : <span className="muted">—</span>}</td>
                     <td>
                       {s.flagged ? (
                         <span className="flag"><Icon name="alert" size={14} /> Flagged</span>
@@ -229,6 +613,8 @@ export default function VersionDetail({ versionId, onChanged }) {
           </div>
         </section>
       )}
+
+      <CommentThread versionId={id} />
     </article>
   );
 }

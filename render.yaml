@@ -1,0 +1,73 @@
+# Render Blueprint for ModelWard (API + metrics service). The React client is
+# deployed separately on Vercel -- see DEPLOYMENT.md for the full walkthrough.
+#
+# Values marked `sync: false` are prompted for in the Render dashboard the first
+# time the Blueprint is applied; they are never stored in this file.
+# Render cannot copy a generated value from one service to another, so
+# METRICS_SHARED_SECRET is generated on modelward-metrics and must be pasted
+# into modelward-api by hand (DEPLOYMENT.md, step 3).
+services:
+  # ---- FastAPI metrics service (scoring). Deploy this FIRST. ----
+  - type: web
+    name: modelward-metrics
+    runtime: python
+    plan: free
+    region: oregon # keep both services in the same region
+    rootDir: metrics-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: APP_ENV
+        value: production # makes METRICS_SHARED_SECRET mandatory
+      - key: METRICS_SHARED_SECRET
+        generateValue: true # copy this value into modelward-api
+      - key: ALLOW_MODEL_FILES
+        value: "false" # pickle/joblib execute code; CSV-only in production
+
+  # ---- Express API ----
+  - type: web
+    name: modelward-api
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: server
+    buildCommand: npm ci
+    startCommand: node server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: NODE_ENV
+        value: production
+      # PORT is injected by Render -- do not set it.
+      - key: MONGO_URI
+        sync: false # mongodb+srv://USER:PASS@CLUSTER.mongodb.net/modelward?retryWrites=true&w=majority
+      - key: JWT_SECRET
+        generateValue: true # random, >= 32 chars (the server refuses to boot otherwise)
+      - key: CLIENT_ORIGIN
+        sync: false # exact Vercel origin, no trailing slash, e.g. https://modelward.vercel.app
+      - key: TRUST_PROXY
+        value: "1" # Render terminates TLS in front of the app; needed for per-IP rate limits
+      - key: METRICS_SERVICE_URL
+        sync: false # https://modelward-metrics.onrender.com (no trailing slash)
+      - key: METRICS_SHARED_SECRET
+        sync: false # paste the value generated on modelward-metrics
+      - key: METRICS_WAKE_TIMEOUT_MS
+        value: "60000" # keep pinging /health while the free-tier metrics service wakes
+      - key: METRICS_TIMEOUT_MS
+        value: "90000"
+      - key: ALLOW_MODEL_FILES
+        value: "false"
+      - key: STORAGE_MODE
+        value: discard # Render's disk is ephemeral; files are deleted after scoring
+      - key: ENABLE_DRIFT_SIMULATION
+        value: "true" # set "false" for a real deployment that only uses monitoring batches
+      - key: ADMIN_INVITE_CODE
+        sync: false # required to self-register an admin; unset = admin signup disabled
+      - key: COMPLIANCE_INVITE_CODE
+        sync: false # required to self-register a compliance officer; unset = disabled

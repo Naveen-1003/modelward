@@ -1,40 +1,62 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
+const mongoose = require("mongoose");
+const env = require("./config/env");
+
+// Fail fast on a bad configuration (weak secret in prod, missing metrics secret, ...).
+try {
+  env.validateEnv();
+} catch (err) {
+  console.error(`[server] ${err.message}`);
+  process.exit(1);
+}
+
+const app = require("./app");
 const connectDB = require("./config/db");
+const { runMigrations } = require("./migrations");
+const { startCleanupJob } = require("./jobs/cleanup");
 
-const authRoutes = require("./routes/auth");
-const modelRoutes = require("./routes/models");
-const versionRoutes = require("./routes/versions");
-const auditRoutes = require("./routes/audit");
+let server;
 
-const app = express();
+async function main() {
+  await connectDB();
+  await runMigrations(); // backfills + dedupe + index creation; idempotent
+  startCleanupJob();
+  server = app.listen(env.port, () => {
+    console.log(`[server] ModelWard API listening on port ${env.port} (${env.nodeEnv})`);
+  });
+}
 
-app.use(cors());
-app.use(express.json());
-
-app.get("/health", (req, res) => res.json({ ok: true, service: "modelward-server" }));
-
-app.use("/api/auth", authRoutes);
-app.use("/api/models", modelRoutes);
-app.use("/api", versionRoutes); // versions.js defines full paths: /models/:id/versions, /versions/:id, ...
-app.use("/api/audit-log", auditRoutes);
-
-// Central error handler -- catches anything (e.g. Multer errors) that slipped
-// past a route's own try/catch instead of crashing the process.
-app.use((err, req, res, next) => {
-  console.error("[unhandled]", err);
-  if (res.headersSent) return next(err);
-  res.status(500).json({ error: "Unexpected server error", details: err.message });
+main().catch((err) => {
+  console.error("[server] Failed to start:", err);
+  process.exit(1);
 });
 
-const PORT = process.env.PORT || 5000;
+// Graceful shutdown so Render deploys don't kill in-flight uploads mid-write.
+let shuttingDown = false;
+function shutdown(signal, exitCode = 0) {
+  if (shuttingDown) return; // a second signal/fault must not restart the sequence
+  shuttingDown = true;
+  console.log(`[server] ${signal} received, shutting down`);
+  const force = setTimeout(() => process.exit(1), 10000);
+  force.unref();
+  const done = () =>
+    mongoose.connection
+      .close(false)
+      .catch(() => {})
+      .finally(() => process.exit(exitCode));
+  if (server) server.close(done);
+  else done();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
-connectDB()
-  .then(() => {
-    app.listen(PORT, () => console.log(`[server] ModelWard API listening on http://localhost:${PORT}`));
-  })
-  .catch((err) => {
-    console.error("[server] Failed to connect to MongoDB:", err.message);
-    process.exit(1);
-  });
+// After an unhandled fault the process state is unknown: log it, stop accepting
+// work, finish in-flight requests and exit non-zero so the platform restarts us.
+// shutdown() is idempotent and force-exits after 10s, so this cannot loop.
+process.on("unhandledRejection", (reason) => {
+  console.error("[server] unhandledRejection:", reason instanceof Error ? reason.stack || reason.message : reason);
+  shutdown("unhandledRejection", 1);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[server] uncaughtException:", err && err.stack ? err.stack : err);
+  shutdown("uncaughtException", 1);
+});

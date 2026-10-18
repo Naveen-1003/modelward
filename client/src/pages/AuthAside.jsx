@@ -30,3 +30,15 @@ export default function AuthAside() {
     </aside>
   );
 }
+
+// Neutral placeholder while the stored session is checked (no form flash before a redirect).
+export function AuthLoading() {
+  return (
+    <main className="auth-page">
+      <AuthAside />
+      <section className="auth-main">
+        <p className="muted" role="status">Loading…</p>
+      </section>
+    </main>
+  );
+}
