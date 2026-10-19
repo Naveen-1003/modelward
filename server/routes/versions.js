@@ -28,6 +28,7 @@ router.param("modelId", validId);
 
 const MODEL_FILES_DISABLED = "Model file uploads are disabled on this deployment; upload a predictions CSV instead";
 const MAX_SNAPSHOTS = 500;
+const SIM_RUN_TICKS = 60; // simulated snapshots per version (about 2.5 minutes at the client's pace)
 const MAX_LATENCY_MS = 600000;
 const ARCHIVABLE = ["draft", "changes_requested", "rejected", "upload_failed", "superseded", "retired"];
 const MODEL_EXTENSIONS = [".pkl", ".pickle", ".joblib"];
@@ -834,7 +835,7 @@ async function liveContext(req) {
 }
 
 // Returns { error:[status,msg] } when it cannot record, else { snapshot, version, escalated }.
-async function recordSnapshot({ version, model, user, baseline, metrics, evaluation, source, rows }) {
+async function recordSnapshot({ version, model, user, baseline, metrics, evaluation, source, rows, audit = true }) {
   // cap re-checked right before the insert (the scoring call in between can be slow); a tiny
   // overshoot under heavy concurrency is accepted
   if ((await MetricSnapshot.countDocuments({ versionId: version._id })) >= MAX_SNAPSHOTS) return { error: [400, snapshotLimitMsg] };
@@ -863,13 +864,15 @@ async function recordSnapshot({ version, model, user, baseline, metrics, evaluat
   if (!updated) updated = await Version.findById(version._id);
   if (!updated) return { error: [409, "The version was archived while the snapshot was being recorded"] };
 
-  await writeAuditLog({
-    actor: user,
-    action: source === "batch" ? "monitoring_batch" : "simulate_drift",
-    targetType: "Version",
-    targetId: version._id,
-    details: `${source === "batch" ? "Batch" : "Simulated"} snapshot for "${model.name}" v${version.versionNumber}: accuracy=${metrics.accuracy.toFixed(3)}, drift=${evaluation.driftDelta.toFixed(3)}, tier=${evaluation.riskTier}${source === "batch" && rows != null ? `, rows=${rows}` : ""}${evaluation.flagged ? " (FLAGGED)" : ""}`,
-  });
+  if (audit || evaluation.flagged) {
+    await writeAuditLog({
+      actor: user,
+      action: source === "batch" ? "monitoring_batch" : "simulate_drift",
+      targetType: "Version",
+      targetId: version._id,
+      details: `${source === "batch" ? "Batch" : "Simulated"} snapshot for "${model.name}" v${version.versionNumber}: accuracy=${metrics.accuracy.toFixed(3)}, drift=${evaluation.driftDelta.toFixed(3)}, tier=${evaluation.riskTier}${source === "batch" && rows != null ? `, rows=${rows}` : ""}${evaluation.flagged ? " (FLAGGED)" : ""}`,
+    });
+  }
   if (becameNeedsReview) {
     await writeAuditLog({
       actor: user,
@@ -898,6 +901,11 @@ router.post("/versions/:id/simulate-drift", authGuard, async (req, res) => {
     if (ctx.error) return res.status(ctx.error[0]).json({ error: ctx.error[1] });
     const { version, model, baseline, last } = ctx;
 
+    // A run is a fixed number of ticks per version; the client drives them while a user is
+    // logged in and looking at the version, so nothing is generated for nobody.
+    const done = await MetricSnapshot.countDocuments({ versionId: version._id, source: "simulated" });
+    if (done >= SIM_RUN_TICKS) return res.status(409).json({ error: "Simulation run complete", done: true, count: done, total: SIM_RUN_TICKS });
+
     // thresholds come from version.thresholdsUsed inside evaluateSnapshot (null fields ignored)
     const next = nextSnapshot(baseline, last, null, version);
     const result = await recordSnapshot({
@@ -909,9 +917,11 @@ router.post("/versions/:id/simulate-drift", authGuard, async (req, res) => {
       evaluation: next,
       source: "simulated",
       rows: last.rows,
+      // only the first and last tick of a run are audited (60 rows per deploy would drown the log)
+      audit: done === 0 || done + 1 >= SIM_RUN_TICKS,
     });
     if (result.error) return res.status(result.error[0]).json({ error: result.error[1] });
-    res.status(201).json(result);
+    res.status(201).json({ ...result, simulation: { count: done + 1, total: SIM_RUN_TICKS, done: done + 1 >= SIM_RUN_TICKS } });
   } catch (err) {
     serverError(res, err, "Failed to simulate drift");
   }

@@ -69,6 +69,11 @@ export default function VersionDetail({ versionId, onChanged, onClone }) {
   const busyRef = useRef("");
   const idRef = useRef(versionId);
   idRef.current = versionId;
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
+  const [simDone, setSimDone] = useState(false);
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -105,6 +110,7 @@ export default function VersionDetail({ versionId, onChanged, onClone }) {
   useEffect(() => {
     // never show another version's actions while the new one loads
     setData(null);
+    setSimDone(false);
     setComment("");
     setGone("");
     setActionError("");
@@ -114,6 +120,45 @@ export default function VersionDetail({ versionId, onChanged, onClone }) {
       reqId.current += 1; // ignore responses that arrive after a switch/unmount
     };
   }, [load]);
+
+  // Live monitoring: while a logged-in user has this deployed version open (and the tab is
+  // visible) the client asks the server for the next simulated snapshot every 2.5 s. Leaving
+  // the page or logging out unmounts this and the stream stops; opening it again resumes the
+  // run until the server says the fixed run is complete.
+  const liveStatus = data?.version?.status;
+  const simulating = config.enableDriftSimulation && liveStatus === "deployed" && !simDone;
+  useEffect(() => {
+    if (!simulating) return undefined;
+    let stopped = false;
+    let timer;
+    const tick = async () => {
+      if (stopped) return;
+      if (!document.hidden && !busyRef.current) {
+        try {
+          const res = await api.post(`/versions/${versionId}/simulate-drift`);
+          if (stopped) return;
+          const d = res.data || {};
+          if (d.simulation?.done) setSimDone(true);
+          if (d.snapshot?.flagged) {
+            toastRef.current.error("Drift flagged on live monitoring: the version needs review");
+            onChangedRef.current?.();
+          }
+          await load(true);
+        } catch (err) {
+          if (stopped) return;
+          const code = err?.response?.status;
+          if (code === 409 && err.response.data?.done) setSimDone(true);
+          if (code !== 429) return; // finished, disabled, no longer live or gone: stop quietly
+        }
+      }
+      if (!stopped) timer = setTimeout(tick, 2500);
+    };
+    timer = setTimeout(tick, 1000);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [simulating, versionId, load]);
 
   // One helper for every mutation: single-flight, toast, reload, tell the parent.
   async function runAction(key, fn, successMsg, opts = {}) {
@@ -173,7 +218,6 @@ export default function VersionDetail({ versionId, onChanged, onClone }) {
   const canDeploy = canDecide && status === "approved";
   const canRetire = canDecide && status === "deployed";
   const canResolve = canDecide && status === "needs_review";
-  const canSimulate = config.enableDriftSimulation && isLive;
   const hasNotes = !!(version.datasetNotes || version.trainingNotes);
 
   // Server rule: comment required for reject / request changes, and for approving a high-risk version.
@@ -270,13 +314,6 @@ export default function VersionDetail({ versionId, onChanged, onClone }) {
     );
     if (res.ok && mounted.current) setEditingNotes(false);
   }
-
-  const driftMsg = (r) => {
-    const d = r?.data || {};
-    if (d.escalated) return "Snapshot added — risk tier escalated and drift flagged";
-    if (d.snapshot?.flagged) return "Snapshot added — drift flagged";
-    return "Snapshot added — within tolerance";
-  };
 
   const tierChanged = version.initialRiskTier && version.initialRiskTier !== version.riskTier;
   const th = version.thresholdsUsed;
@@ -524,20 +561,6 @@ export default function VersionDetail({ versionId, onChanged, onClone }) {
       {/* Any role: monitoring on live versions */}
       {isLive && (
         <div className="action-bar monitoring">
-          <div className="btn-row">
-            {canSimulate && (
-              <button
-                type="button"
-                className="secondary"
-                disabled={working}
-                aria-busy={busy === "simulate"}
-                title="Generates a synthetic snapshot for demos; it is not real monitoring data"
-                onClick={() => runAction("simulate", () => post("simulate-drift"), driftMsg)}
-              >
-                Simulate drift (demo)
-              </button>
-            )}
-          </div>
           <MonitoringPanel versionId={id} run={runAction} disabled={working} />
         </div>
       )}
@@ -574,7 +597,11 @@ export default function VersionDetail({ versionId, onChanged, onClone }) {
 
       {snapshots && snapshots.length > 0 && (
         <section className="section">
-          <div className="section-head"><h3>Snapshot history</h3></div>
+          <div className="section-head">
+            <h3>Live monitoring</h3>
+            {simulating && <span className="muted small" role="status">Live: simulated data streaming in</span>}
+            {config.enableDriftSimulation && isLive && simDone && <span className="muted small">Simulated run complete</span>}
+          </div>
           <div className="table-wrap">
             <table>
               <thead>

@@ -620,7 +620,7 @@ describe("drift monitoring", () => {
     for (let i = 1; i <= 6; i += 1) {
       const res = await sim();
       expect(res.status).toBe(201);
-      expect(Object.keys(res.body).sort()).toEqual(["escalated", "snapshot", "version"]);
+      expect(Object.keys(res.body).sort()).toEqual(["escalated", "simulation", "snapshot", "version"]);
       seen.push(res.body);
       if (res.body.snapshot.flagged && flaggedAt === null) flaggedAt = i;
     }
@@ -636,7 +636,7 @@ describe("drift monitoring", () => {
     expect(seen[5]).toMatchObject({ escalated: false }); // .77: still medium, no further escalation
     expect(seen[5].snapshot.riskTier).toBe("medium");
     expect(await AuditLog.countDocuments({ targetId: live._id, action: "drift_flagged" })).toBe(1);
-    expect(await AuditLog.countDocuments({ targetId: live._id, action: "simulate_drift" })).toBe(6);
+    expect(await AuditLog.countDocuments({ targetId: live._id, action: "simulate_drift" })).toBe(4); // first tick + the 3 flagged ones; quiet ticks are not audited
 
     const detail = await get(officer, `/api/versions/${live._id}`);
     expect(detail.body.snapshots).toHaveLength(7);
@@ -671,13 +671,26 @@ describe("drift monitoring", () => {
     env.enableDriftSimulation = true;
     const base = await MetricSnapshot.findOne({ versionId: live._id });
     await MetricSnapshot.insertMany(
-      Array.from({ length: 499 }, () => ({ orgId: base.orgId, versionId: live._id, accuracy: 0.9, fairnessGap: 0.02, source: "simulated", riskTier: "low" }))
+      Array.from({ length: 499 }, () => ({ orgId: base.orgId, versionId: live._id, accuracy: 0.9, fairnessGap: 0.02, source: "batch", riskTier: "low" }))
     );
     expect(base).toBeTruthy();
     const res = await sim();
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/500/);
     expect((await post(engineer, `/api/versions/${live._id}/monitoring-batch`)).status).toBe(400);
+  });
+
+  test("a simulated run is fixed at 60 ticks, then answers 409 done", async () => {
+    const base = await MetricSnapshot.findOne({ versionId: live._id });
+    await MetricSnapshot.insertMany(
+      Array.from({ length: 59 }, () => ({ orgId: base.orgId, versionId: live._id, accuracy: 0.95, fairnessGap: 0.02, source: "simulated", riskTier: "low" }))
+    );
+    const last = await sim();
+    expect(last.status).toBe(201);
+    expect(last.body.simulation).toEqual({ count: 60, total: 60, done: true });
+    const after = await sim();
+    expect(after.status).toBe(409);
+    expect(after.body).toMatchObject({ done: true, count: 60, total: 60 });
   });
 
   test("simulate requires auth and a live version", async () => {

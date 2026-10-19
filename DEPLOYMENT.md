@@ -398,7 +398,7 @@ Read only through `server/config/env.js`. Copy `server/.env.example` for local d
 | `JOIN_CODE_MAX_FAILURES` | no | `10` | Invalid join-code attempts per IP per 15 minutes. |
 | `RESEND_VERIFY_MAX` | no | `5` | Verification re-sends per IP and per address per hour. |
 | `AUDIT_HMAC_KEY` | recommended | none | Keys the audit hash chain (see [Audit](#audit-log-integrity)). |
-| `ENABLE_DRIFT_SIMULATION` | no | `true` | `false` on a real deployment that only uses monitoring batches. |
+| `ENABLE_DRIFT_SIMULATION` | no | `true` | `false` on a real deployment that only uses monitoring batches (turns off the simulated Live monitoring stream). |
 | `LOGIN_MAX_FAILURES` | no | `10` | Failed logins per IP per window before 429. |
 | `LOGIN_WINDOW_MINUTES` | no | `15` | |
 | `SIGNUP_MAX_PER_HOUR` | no | `20` | Signup requests per IP per hour. |
@@ -603,7 +603,7 @@ data. Test a restore once. Soft-deleted items are still in the database and are 
 - [ ] `CLIENT_ORIGIN` is the exact origin: scheme + host, **no trailing slash**, no path
       (or you chose the Vercel rewrite option).
 - [ ] `TRUST_PROXY=1` on the API.
-- [ ] `ENABLE_DRIFT_SIMULATION` decided (`false` if the simulate button should not exist).
+- [ ] `ENABLE_DRIFT_SIMULATION` decided (`false` if the simulated Live monitoring stream should not exist).
 - [ ] Thresholds reviewed per organization in Admin > Settings (low/medium risk and drift thresholds).
 - [ ] `GET /health` on both services returns ok; Render health checks are green.
 - [ ] Run the smoke test against a **development/staging** stack

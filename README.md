@@ -37,7 +37,7 @@ Deploying to Vercel + Render + MongoDB Atlas? See **[DEPLOYMENT.md](DEPLOYMENT.m
 - **Real monitoring** -- upload a new predictions batch for a deployed version and
   it is re-scored by the metrics service. Drift flags move the version to
   `needs_review` until a compliance officer resolves it (keep or retire). The
-  simulated drift button is optional (`ENABLE_DRIFT_SIMULATION`).
+  simulated live monitoring is optional (`ENABLE_DRIFT_SIMULATION`).
 - **Configurable thresholds** -- each organization's admin sets its own low/medium risk
   and drift thresholds; each version records the thresholds it was scored under, and its
   risk tier is re-evaluated on every snapshot.
@@ -154,7 +154,7 @@ the ones you are most likely to touch:
 | `JOIN_CODE_MAX_FAILURES` / `RESEND_VERIFY_MAX` | `10` / `5` | Invalid join-code attempts per IP per 15 min; verification re-sends per IP and per address per hour |
 | `ALLOW_MODEL_FILES` | `true` dev / `false` prod | Accept pickle/joblib uploads (they execute code) |
 | `STORAGE_MODE` | `local` dev / `discard` prod | Keep or delete uploaded files after scoring |
-| `ENABLE_DRIFT_SIMULATION` | `true` | Show/allow the simulate-drift button |
+| `ENABLE_DRIFT_SIMULATION` | `true` | Stream simulated "Live monitoring" snapshots (60 per deployed version, 2.5 s apart, only while a logged-in user has the version open) |
 | `MAX_UPLOAD_MB` | `25` | Upload size limit (413 above it) |
 | `RETENTION_DAYS` | `30` | Days before retained files of archived/failed versions are deleted |
 | `LOGIN_MAX_FAILURES` / `LOGIN_WINDOW_MINUTES` | `10` / `15` | Failed-login rate limit per IP |
