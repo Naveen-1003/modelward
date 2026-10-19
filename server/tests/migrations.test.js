@@ -5,8 +5,13 @@ const mongoose = require("mongoose");
 const app = require("../app");
 const computeMetrics = require("../utils/metricsClient");
 const { runMigrations, ensureIndexes } = require("../migrations");
-const { connect, disconnect, makeUser } = require("./helpers");
+const env = require("../config/env");
+const { connect, disconnect, makeUser, makeOrg } = require("./helpers");
 const { GOOD, uploadCsv, createModel, post } = require("./domainHelpers");
+
+// A developer's .env may configure a platform owner; these tests are about the data migration.
+env.superAdminEmail = "";
+env.superAdminPassword = "";
 
 const oid = () => new mongoose.Types.ObjectId();
 const col = (name) => mongoose.connection.collection(name);
@@ -74,6 +79,15 @@ describe("runMigrations on legacy-shaped data", () => {
   test("backfills, renumbers duplicates, renames duplicate names, builds indexes", async () => {
     const summary = await runMigrations();
     expect(summary.join(" | ")).toMatch(/renamed 2 duplicate model name/);
+    expect(summary.join(" | ")).toMatch(/created organization "Default Organization"/);
+
+    // every legacy row now belongs to the one Default Organization
+    const orgs = await col("organizations").find().toArray();
+    expect(orgs).toHaveLength(1);
+    ids.org = orgs[0]._id;
+    for (const c of ["models", "versions", "metricsnapshots", "users"]) {
+      expect(await col(c).countDocuments({ orgId: { $ne: ids.org } })).toBe(0);
+    }
 
     // soft-delete flag everywhere
     for (const c of ["models", "versions"]) expect(await col(c).countDocuments({ isDeleted: { $exists: false } })).toBe(0);
@@ -112,11 +126,12 @@ describe("runMigrations on legacy-shaped data", () => {
     expect(snaps[1]).toMatchObject({ source: "simulated", riskTier: "high" });
 
     // users
-    expect((await col("users").findOne({ email: "old@user.test" })).isActive).toBe(true);
+    expect(await col("users").findOne({ email: "old@user.test" })).toMatchObject({ isActive: true, status: "active", emailKey: "old@user.test", orgId: ids.org });
 
     // indexes
     const modelIdx = await col("models").indexes();
     const nameIdx = modelIdx.find((i) => i.key.name === 1);
+    expect(nameIdx.key).toEqual({ orgId: 1, name: 1 });
     expect(nameIdx).toMatchObject({ unique: true, partialFilterExpression: { isDeleted: false }, collation: expect.objectContaining({ locale: "en", strength: 2 }) });
     const versionIdx = (await col("versions").indexes()).find((i) => i.key.modelId === 1 && i.key.versionNumber === 1);
     expect(versionIdx.unique).toBe(true);
@@ -142,7 +157,7 @@ describe("runMigrations on legacy-shaped data", () => {
 
   test("new uploads continue after the legacy numbers; legacy duplicates now collide with new names", async () => {
     computeMetrics.mockResolvedValue(GOOD);
-    const { token: engineer } = await makeUser("ml_engineer");
+    const { token: engineer } = await makeUser("ml_engineer", { orgId: ids.org });
     const up = await uploadCsv(engineer, String(ids.dupOld));
     expect(up.status).toBe(201);
     expect(up.body.version.versionNumber).toBe(4);
@@ -165,7 +180,9 @@ describe("runMigrations on an empty database", () => {
     const summary = await runMigrations();
     expect(summary).toEqual([]);
     expect((await col("models").indexes()).some((i) => i.key.name === 1 && i.unique)).toBe(true);
-    const { token } = await makeUser("ml_engineer");
+    expect(await col("organizations").countDocuments()).toBe(0); // no organization is invented
+    const org = await makeOrg();
+    const { token } = await makeUser("ml_engineer", { orgId: org._id });
     const model = await createModel(token, "Fresh model");
     computeMetrics.mockResolvedValue(GOOD);
     expect((await uploadCsv(token, model._id)).body.version.versionNumber).toBe(1);

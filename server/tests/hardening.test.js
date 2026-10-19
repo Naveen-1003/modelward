@@ -3,16 +3,17 @@ const request = require("supertest");
 const express = require("express");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, makeOrg, sys, auth } = require("./helpers");
 
-let app, env, User, AuditLog, writeAuditLog, rateLimit, chain;
+let app, env, User, AuditLog, Organization, writeAuditLog, rateLimit, chain, email;
 const raw = () => mongoose.connection.collection("auditlogs");
 const oid = () => new mongoose.Types.ObjectId();
 
 async function fresh() {
   await reset();
-  await Promise.all([AuditLog.createIndexes(), User.createIndexes()]);
+  await Promise.all([AuditLog.createIndexes(), User.createIndexes(), Organization.createIndexes()]);
   rateLimit.resetAll();
+  email.clearOutbox();
 }
 
 beforeAll(async () => {
@@ -21,15 +22,26 @@ beforeAll(async () => {
   app = require("../app");
   User = require("../models/User");
   AuditLog = require("../models/AuditLog");
+  Organization = require("../models/Organization");
+  email = require("../utils/email");
   writeAuditLog = require("../middleware/audit");
   rateLimit = require("../middleware/rateLimit");
   chain = require("../utils/auditChain");
 });
 afterAll(disconnect);
-beforeEach(fresh);
+beforeEach(async () => {
+  superToken = null;
+  await fresh();
+});
 afterEach(() => jest.restoreAllMocks());
 
-const verify = (token, qs = "") => auth(request(app).get(`/api/audit-log/verify${qs}`), token);
+// The full chain report is the platform owner's view (an org admin gets the organization-scoped one,
+// asserted separately below), so these tests read it as a super admin.
+let superToken;
+const verify = async (token, qs = "") => {
+  if (!superToken) superToken = (await makeUser("super_admin")).token;
+  return auth(request(app).get(`/api/audit-log/verify${qs}`), superToken);
+};
 
 // ---------------------------------------------------------------------------
 describe("#1 last-admin race", () => {
@@ -37,14 +49,14 @@ describe("#1 last-admin race", () => {
     const a = await makeUser("admin");
     const b = await makeUser("admin");
     for (let round = 0; round < 5; round += 1) {
-      await User.updateMany({ _id: { $in: [a.user._id, b.user._id] } }, { role: "admin", isActive: true });
+      await sys(User).updateMany({ _id: { $in: [a.user._id, b.user._id] } }, { role: "admin", isActive: true });
       const body1 = round % 2 ? { role: "ml_engineer" } : { isActive: false };
       const [r1, r2] = await Promise.all([
         auth(request(app).patch(`/api/users/${b.user._id}`), a.token).send(body1),
         auth(request(app).patch(`/api/users/${a.user._id}`), b.token).send(body1),
       ]);
       expect([r1.status, r2.status].filter((s) => s === 200)).toHaveLength(1);
-      expect(await User.countDocuments({ role: "admin", isActive: { $ne: false } })).toBe(1);
+      expect(await sys(User).countDocuments({ role: "admin", isActive: { $ne: false } })).toBe(1);
     }
   });
 
@@ -57,18 +69,18 @@ describe("#1 last-admin race", () => {
     const res = await auth(request(app).patch(`/api/users/${b.user._id}`), a.token).send({ role: "ml_engineer" });
     expect(res.status).toBe(409);
     spy.mockRestore();
-    expect((await User.findById(b.user._id)).role).toBe("admin"); // reverted
-    expect(await AuditLog.countDocuments({ action: "update_user" })).toBe(0);
+    expect((await sys(User).findById(b.user._id)).role).toBe("admin"); // reverted
+    expect(await sys(AuditLog).countDocuments({ action: "update_user" })).toBe(0);
   });
 
   test("an admin demoted while waiting on the lock cannot act with the stale token", async () => {
     const a = await makeUser("admin");
     const b = await makeUser("admin");
     const c = await makeUser("ml_engineer");
-    await User.updateOne({ _id: a.user._id }, { role: "ml_engineer" }); // token still says admin, authGuard re-reads => 403
+    await sys(User).updateOne({ _id: a.user._id }, { role: "ml_engineer" }); // token still says admin, authGuard re-reads => 403
     const res = await auth(request(app).patch(`/api/users/${c.user._id}`), a.token).send({ role: "admin" });
     expect(res.status).toBe(403);
-    expect((await User.findById(c.user._id)).role).toBe("ml_engineer");
+    expect((await sys(User).findById(c.user._id)).role).toBe("ml_engineer");
     expect(b).toBeDefined();
   });
 });
@@ -83,11 +95,17 @@ describe("#2 audit chain and lone surrogates / #9 multi-writer", () => {
       .set("Content-Type", "application/json")
       .send('{"email":"x\\ud800y@z.com","password":"badpassword"}');
     expect(r.status).toBe(401);
-    const row = await AuditLog.findOne({ action: "login_failed" }).lean();
+    const row = await sys(AuditLog).findOne({ action: "login_failed" }).lean();
     expect(row.details).toBe("Failed login for x�y@z.com");
     const v = await verify(admin.token);
     expect(v.body.ok).toBe(true);
     expect(v.body.checked).toBeGreaterThan(0);
+    // the organization admin gets the organization-scoped report of the same chain
+    const scoped = await auth(request(app).get("/api/audit-log/verify"), admin.token);
+    expect(scoped.body.ok).toBe(true);
+    expect(scoped.body.brokenInOrg).toEqual([]);
+    expect(scoped.body.checked).toBeUndefined();
+    expect(scoped.body.head).toBeUndefined();
   });
 
   test("wellFormed replaces lone surrogates, keeps valid pairs", () => {
@@ -118,7 +136,7 @@ describe("#2 audit chain and lone surrogates / #9 multi-writer", () => {
       )
     );
     expect(results.filter((r) => r.status === "rejected")).toHaveLength(0);
-    expect(await AuditLog.countDocuments()).toBe(30);
+    expect(await sys(AuditLog).countDocuments()).toBe(30);
     const v = await chain.verifyChain(AuditLog);
     expect(v).toMatchObject({ ok: true, checked: 30 });
   });
@@ -136,23 +154,29 @@ describe("#2 audit chain and lone surrogates / #9 multi-writer", () => {
 // ---------------------------------------------------------------------------
 describe("#3 audit scoping", () => {
   test("a user NAMED 'anonymous' does not see anonymous login_failed rows", async () => {
+    await makeUser("ml_engineer", { email: "victim@x.com" });
     await request(app).post("/api/auth/login").send({ email: "victim@x.com", password: "whatever1" });
+    await request(app).post("/api/auth/login").send({ email: "nobody@x.com", password: "whatever1" }); // unknown: platform-level row
     for (const name of ["anonymous", "Anonymous "]) {
       const spy = await makeUser("ml_engineer", { name });
       const res = await auth(request(app).get("/api/audit-log"), spy.token);
       expect(res.status).toBe(200);
       expect(res.body.total).toBe(0);
     }
+    // the organization's reviewer sees its own failed login, never the platform-level one
     const comp = await makeUser("compliance_officer");
-    expect((await auth(request(app).get("/api/audit-log"), comp.token)).body.total).toBe(1);
+    const seen = await auth(request(app).get("/api/audit-log"), comp.token);
+    expect(seen.body.total).toBe(1);
+    expect(seen.body.logs[0].details).toContain("victim@x.com");
   });
 
   test("the legacy actorName branch only matches rows with no seq and no actorId (never chained rows of a namesake)", async () => {
     const a = await makeUser("ml_engineer", { name: "Sam Twin" });
     const b = await makeUser("ml_engineer", { name: "Sam Twin" });
     await writeAuditLog({ actor: b.user, action: "login", targetType: "User", targetId: oid(), details: "chained row by namesake" });
-    await raw().insertOne({ actorName: "Sam Twin", actorRole: "ml_engineer", action: "login", targetType: "User", details: "true legacy", createdAt: new Date(1) });
-    await raw().insertOne({ actorName: "Sam Twin", actorRole: "none", action: "login_failed", targetType: "User", details: "legacy anonymous-role", createdAt: new Date(2) });
+    // legacy rows as the migration leaves them: no seq, no actorId, orgId backfilled
+    await raw().insertOne({ orgId: a.user.orgId, actorName: "Sam Twin", actorRole: "ml_engineer", action: "login", targetType: "User", details: "true legacy", createdAt: new Date(1) });
+    await raw().insertOne({ orgId: a.user.orgId, actorName: "Sam Twin", actorRole: "none", action: "login_failed", targetType: "User", details: "legacy anonymous-role", createdAt: new Date(2) });
     const res = await auth(request(app).get("/api/audit-log"), a.token);
     expect(res.body.logs.map((l) => l.details)).toEqual(["true legacy"]);
   });
@@ -172,8 +196,8 @@ describe("#4 keyed chain, head, truncation", () => {
     env.auditHmacKey = KEY;
     await writeAuditLog({ actor: admin.user, action: "login", targetType: "User", details: "hmac row 3" });
     await writeAuditLog({ actor: admin.user, action: "login", targetType: "User", details: "hmac row 4" });
-    expect((await AuditLog.findOne({ seq: 3 }).lean()).hashAlg).toBe("hmac-sha256");
-    expect((await AuditLog.findOne({ seq: 1 }).lean()).hashAlg).toBe("sha256");
+    expect((await sys(AuditLog).findOne({ seq: 3 }).lean()).hashAlg).toBe("hmac-sha256");
+    expect((await sys(AuditLog).findOne({ seq: 1 }).lean()).hashAlg).toBe("sha256");
 
     let v = await verify(admin.token);
     expect(v.body).toMatchObject({ ok: true, checked: 4, keyed: true, hashAlgs: { sha256: 2, "hmac-sha256": 2 } });
@@ -189,7 +213,7 @@ describe("#4 keyed chain, head, truncation", () => {
 
     // downgrade: a forged sha256 row appended after hmac rows
     env.auditHmacKey = KEY;
-    const last = await AuditLog.findOne().sort({ seq: -1 }).lean();
+    const last = await sys(AuditLog).findOne().sort({ seq: -1 }).lean();
     const forged = { seq: 5, prevHash: last.hash, actorName: "x", actorRole: "admin", action: "login", targetType: "User", details: "forged", createdAt: new Date(), hashAlg: "sha256" };
     forged.hash = chain.computeHash(forged, "sha256");
     await raw().insertOne(forged);
@@ -308,27 +332,36 @@ describe("#5 rate limiting", () => {
 
 // ---------------------------------------------------------------------------
 describe("#6 bcrypt 72-byte limit", () => {
-  const base = { name: "n", role: "ml_engineer" };
-  test("signup rejects > 72 bytes (even if <= 128 chars) with a clear message; accepts exactly 72 bytes", async () => {
-    const tooLong = "é".repeat(37); // 37 chars, 74 bytes
-    let res = await request(app).post("/api/auth/signup").send({ ...base, email: "long1@x.com", password: tooLong });
+  test("verifying an email rejects a password > 72 bytes (even if <= 128 chars) and keeps the link usable; accepts exactly 72 bytes", async () => {
+    const org = await makeOrg({ allowedDomains: ["x.com"] });
+    const base = { name: "n", joinCode: org.codes.ml_engineer.value };
+    const verifyWith = async (address, password) => {
+      email.clearOutbox();
+      expect((await request(app).post("/api/auth/signup").send({ ...base, email: address })).status).toBe(201);
+      const link = email.extractLinks(email.outbox[0].text).find((l) => l.includes("/verify-email"));
+      const token = new URL(link).searchParams.get("token");
+      return { token, res: await request(app).post("/api/auth/verify-email").send({ token, password }) };
+    };
+    let { token, res } = await verifyWith("long1@x.com", "é".repeat(37)); // 37 chars, 74 bytes
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/password must be at most 72 bytes/);
-    res = await request(app).post("/api/auth/signup").send({ ...base, email: "long2@x.com", password: "A".repeat(73) });
+    res = await request(app).post("/api/auth/verify-email").send({ token, password: "A".repeat(73) });
     expect(res.status).toBe(400);
-    res = await request(app).post("/api/auth/signup").send({ ...base, email: "ok72@x.com", password: "é".repeat(36) });
-    expect(res.status).toBe(201);
-    res = await request(app).post("/api/auth/signup").send({ ...base, email: "short@x.com", password: "short" });
+    res = await request(app).post("/api/auth/verify-email").send({ token, password: "short" });
     expect(res.body.error).toMatch(/at least 8/);
+    res = await request(app).post("/api/auth/verify-email").send({ token, password: "é".repeat(36) });
+    expect(res.status).toBe(200); // the same link, still valid, exactly 72 bytes
   });
 
-  test("POST /api/users rejects > 72 bytes", async () => {
-    const admin = await makeUser("admin");
-    const res = await auth(request(app).post("/api/users"), admin.token).send({ ...base, email: "u@x.com", password: "A".repeat(73) });
+  test("setting a password from a setup link enforces the same limit (Add user takes no password any more)", async () => {
+    const { newToken } = require("../utils/identity");
+    const t = newToken();
+    await makeUser("ml_engineer", { status: "invited", extra: { passwordHash: "!unusable!", setupTokenHash: t.hash, setupExpiresAt: new Date(Date.now() + 3600000) } });
+    let res = await request(app).post("/api/auth/setup-password").send({ token: t.token, password: "A".repeat(73) });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/72 bytes/);
-    const ok = await auth(request(app).post("/api/users"), admin.token).send({ ...base, email: "u@x.com", password: "A".repeat(72) });
-    expect(ok.status).toBe(201);
+    res = await request(app).post("/api/auth/setup-password").send({ token: t.token, password: "A".repeat(72) });
+    expect(res.status).toBe(200);
   });
 });
 
@@ -339,6 +372,8 @@ describe("#7 / #10 / #15 env validation", () => {
     "COMPLIANCE_INVITE_CODE", "TRUST_PROXY", "CLIENT_ORIGIN", "ALLOW_MODEL_FILES", "LOGIN_MAX_FAILURES", "LOGIN_ACCOUNT_MAX_FAILURES",
     "LOGIN_WINDOW_MINUTES", "SIGNUP_MAX_PER_HOUR", "API_MAX_PER_MINUTE", "PORT", "AUDIT_HMAC_KEY", "ENABLE_DRIFT_SIMULATION",
     "METRICS_TIMEOUT_MS", "METRICS_WAKE_TIMEOUT_MS", "MAX_UPLOAD_MB", "RETENTION_DAYS",
+    "EMAIL_PROVIDER", "APPS_SCRIPT_URL", "APPS_SCRIPT_SECRET", "EMAIL_FROM_NAME", "APP_URL", "SUPER_ADMIN_EMAIL", "SUPER_ADMIN_PASSWORD",
+    "SUPER_ADMIN_NAME", "DEFAULT_ORG_NAME", "JOIN_CODE_MAX_FAILURES", "RESEND_VERIFY_MAX",
   ];
   const GOOD_PROD = {
     NODE_ENV: "production",
@@ -348,6 +383,11 @@ describe("#7 / #10 / #15 env validation", () => {
     METRICS_SERVICE_URL: "https://modelward-metrics.onrender.com",
     ADMIN_INVITE_CODE: "",
     COMPLIANCE_INVITE_CODE: "",
+    EMAIL_PROVIDER: "apps_script",
+    APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbxExampleDeployment/exec",
+    APPS_SCRIPT_SECRET: "relay-5e3c1f9a7b2d4c60a8f1",
+    EMAIL_FROM_NAME: "", APP_URL: "https://app.modelward.dev", SUPER_ADMIN_EMAIL: "owner@modelward.dev", SUPER_ADMIN_PASSWORD: "", SUPER_ADMIN_NAME: "", DEFAULT_ORG_NAME: "",
+    JOIN_CODE_MAX_FAILURES: "", RESEND_VERIFY_MAX: "",
     TRUST_PROXY: "",
     CLIENT_ORIGIN: "https://app.modelward.dev",
     ALLOW_MODEL_FILES: "",
@@ -363,6 +403,7 @@ describe("#7 / #10 / #15 env validation", () => {
     Object.assign(process.env, vars);
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     let fresh, result;
+    let warnings = [];
     try {
       jest.isolateModules(() => {
         fresh = require("../config/env");
@@ -375,9 +416,10 @@ describe("#7 / #10 / #15 env validation", () => {
       }
     } finally {
       MANAGED.forEach((k) => { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; });
+      warnings = warn.mock.calls.map((c) => String(c[0]));
       warn.mockRestore();
     }
-    return { env: fresh, ...result };
+    return { env: fresh, warnings, ...result };
   }
   const prod = (over = {}) => load({ ...GOOD_PROD, ...over });
 
@@ -405,12 +447,65 @@ describe("#7 / #10 / #15 env validation", () => {
     expect(load({ ...GOOD_PROD, NODE_ENV: "development", JWT_SECRET: "replace-with-a-long-random-string-at-least-32-chars", MONGO_URI: "mongodb://127.0.0.1/x" }).ok).toBe(true);
   });
 
-  test("invite codes: production needs >= 16 chars and no placeholder; dev only warns", () => {
-    expect(prod({ ADMIN_INVITE_CODE: "short-code" }).message).toMatch(/ADMIN_INVITE_CODE must be at least 16/);
-    expect(prod({ COMPLIANCE_INVITE_CODE: "change-me-compliance-invite" }).message).toMatch(/COMPLIANCE_INVITE_CODE looks like a placeholder/);
-    expect(prod({ ADMIN_INVITE_CODE: "Xk29-QwErTy-77aZ-pLm4" }).ok).toBe(true);
-    // development: a short code is only a warning
-    expect(load({ ...GOOD_PROD, NODE_ENV: "development", MONGO_URI: "mongodb://127.0.0.1/x", ADMIN_INVITE_CODE: "abc" }).ok).toBe(true);
+  test("the invite-code variables no longer exist: setting them changes nothing and is not an error", () => {
+    const r = prod({ ADMIN_INVITE_CODE: "short-code", COMPLIANCE_INVITE_CODE: "change-me-compliance-invite" });
+    expect(r.ok).toBe(true);
+    expect(r.env.adminInviteCode).toBeUndefined();
+    expect(r.env.complianceInviteCode).toBeUndefined();
+  });
+
+  test("EMAIL_PROVIDER: console | apps_script; anything else is a problem; apps_script needs an https URL and a secret in production", () => {
+    expect(prod({ EMAIL_PROVIDER: "sendgrid" }).message).toMatch(/EMAIL_PROVIDER "sendgrid" is not one of: console, apps_script/);
+    expect(prod({ EMAIL_PROVIDER: "APPS_SCRIPT" }).env.emailProvider).toBe("apps_script"); // case-insensitive
+    expect(prod({ APPS_SCRIPT_URL: "" }).message).toMatch(/APPS_SCRIPT_URL must be an https URL/);
+    expect(prod({ APPS_SCRIPT_URL: "http://script.google.com/macros/s/x/exec" }).message).toMatch(/APPS_SCRIPT_URL must be an https URL/);
+    expect(prod({ APPS_SCRIPT_URL: "not a url" }).message).toMatch(/APPS_SCRIPT_URL/);
+    expect(prod({ APPS_SCRIPT_SECRET: "" }).message).toMatch(/APPS_SCRIPT_SECRET is required/);
+    // development: only a warning
+    const dev = load({ ...GOOD_PROD, NODE_ENV: "development", MONGO_URI: "mongodb://127.0.0.1/x", APPS_SCRIPT_URL: "", APPS_SCRIPT_SECRET: "" });
+    expect(dev.ok).toBe(true);
+    expect(dev.warnings.join("\n")).toMatch(/APPS_SCRIPT_URL/);
+    // an unknown provider falls back to console (and is reported above)
+    expect(prod({ EMAIL_PROVIDER: "sendgrid" }).env.emailProvider).toBe("console");
+  });
+
+  test("self-signup is disabled in production while the provider is console (and only then)", () => {
+    const consoleProd = prod({ EMAIL_PROVIDER: "console", APPS_SCRIPT_URL: "", APPS_SCRIPT_SECRET: "" });
+    expect(consoleProd.ok).toBe(true); // a warning, not a crash
+    expect(consoleProd.env.signupEnabled).toBe(false);
+    expect(consoleProd.warnings.join("\n")).toMatch(/self-signup is disabled/);
+    expect(prod().env.signupEnabled).toBe(true);
+    expect(load({ ...GOOD_PROD, NODE_ENV: "development", EMAIL_PROVIDER: "console", MONGO_URI: "mongodb://127.0.0.1/x" }).env.signupEnabled).toBe(true);
+  });
+
+  test("APP_URL must be a plain origin; it defaults to the first CLIENT_ORIGIN, then to the local dev server; localhost warns in production", () => {
+    expect(prod({ APP_URL: "https://app.modelward.dev/" }).env.appUrl).toBe("https://app.modelward.dev");
+    expect(prod({ APP_URL: "https://app.modelward.dev/path" }).message).toMatch(/APP_URL/);
+    expect(prod({ APP_URL: "ftp://x.dev" }).message).toMatch(/APP_URL/);
+    expect(prod({ APP_URL: "", CLIENT_ORIGIN: "https://client.modelward.dev" }).env.appUrl).toBe("https://client.modelward.dev");
+    expect(prod({ APP_URL: "", CLIENT_ORIGIN: "" }).env.appUrl).toBe("http://localhost:5173");
+    expect(prod({ APP_URL: "http://localhost:5173" }).warnings.join("\n")).toMatch(/APP_URL points at localhost/);
+  });
+
+  test("SUPER_ADMIN_EMAIL is normalized and validated; its absence in production is only a warning", () => {
+    expect(prod({ SUPER_ADMIN_EMAIL: "  Owner@ModelWard.dev " }).env.superAdminEmail).toBe("owner@modelward.dev");
+    expect(prod({ SUPER_ADMIN_EMAIL: "not-an-email" }).message).toMatch(/SUPER_ADMIN_EMAIL is not a valid email/);
+    const none = prod({ SUPER_ADMIN_EMAIL: "" });
+    expect(none.ok).toBe(true);
+    expect(none.warnings.join("\n")).toMatch(/SUPER_ADMIN_EMAIL is not set/);
+  });
+
+  test("join-code and resend limits default to 10 failures / 5 re-sends and must be integers >= 1", () => {
+    expect(prod().env.joinCodeMaxFailures).toBe(10);
+    expect(prod().env.resendVerifyMax).toBe(5);
+    expect(prod({ JOIN_CODE_MAX_FAILURES: "3", RESEND_VERIFY_MAX: "2" }).env).toMatchObject({ joinCodeMaxFailures: 3, resendVerifyMax: 2 });
+    for (const name of ["JOIN_CODE_MAX_FAILURES", "RESEND_VERIFY_MAX"]) {
+      for (const bad of ["0", "abc", "-1", "1.5", "10s"]) {
+        const r = prod({ [name]: bad });
+        expect(r.ok).toBe(false);
+        expect(r.message).toContain(name);
+      }
+    }
   });
 
   test("localhost detection covers [::1], ::1, 0.0.0.0, 127.0.0.1, localhost (not other IPv6)", () => {

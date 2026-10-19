@@ -13,13 +13,17 @@ const app = require("./app");
 const connectDB = require("./config/db");
 const { runMigrations } = require("./migrations");
 const { startCleanupJob } = require("./jobs/cleanup");
+const { startExpiryJob } = require("./jobs/expireUnverified");
 
 let server;
 
 async function main() {
   await connectDB();
-  await runMigrations(); // backfills + dedupe + index creation; idempotent
+  // super admin promotion/seed (a missing SUPER_ADMIN_EMAIL only warns) + tenant backfill + dedupe
+  // + index creation; idempotent
+  await runMigrations();
   startCleanupJob();
+  startExpiryJob();
   server = app.listen(env.port, () => {
     console.log(`[server] ModelWard API listening on port ${env.port} (${env.nodeEnv})`);
   });

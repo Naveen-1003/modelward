@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const softDelete = require("../utils/softDelete");
+const { tenantPlugin } = require("../utils/tenant");
 
 // The registered AI model being governed (not to be confused with a Mongoose "model").
 // Deliberately has NO riskTier field -- risk is a property of a measured Version,
@@ -15,11 +16,13 @@ const modelSchema = new mongoose.Schema({
 }, { timestamps: { createdAt: true, updatedAt: false } });
 
 modelSchema.plugin(softDelete);
+modelSchema.plugin(tenantPlugin);
 
-// Names are unique case-insensitively among non-archived models only, so an
-// archived name can be reused. Created by migrations.ensureIndexes() (autoIndex is off).
+// Names are unique case-insensitively PER ORGANIZATION among non-archived models only, so an
+// archived name can be reused and two companies may both have a "Credit Scorer".
+// Created by migrations.ensureIndexes() (autoIndex is off).
 modelSchema.index(
-  { name: 1 },
+  { orgId: 1, name: 1 },
   { unique: true, collation: { locale: "en", strength: 2 }, partialFilterExpression: { isDeleted: false } }
 );
 modelSchema.index({ createdAt: -1 });

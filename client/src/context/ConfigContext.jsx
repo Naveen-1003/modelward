@@ -7,7 +7,7 @@ export const DEFAULT_CONFIG = {
   enableDriftSimulation: true,
   storageMode: "local",
   minPasswordLength: 8,
-  signupRolesRequiringCode: ["admin", "compliance_officer"],
+  signupEnabled: true,
 };
 
 const ConfigContext = createContext({ config: DEFAULT_CONFIG, loading: false });

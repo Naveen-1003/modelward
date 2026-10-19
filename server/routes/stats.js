@@ -6,6 +6,7 @@ const Model = require("../models/Model");
 const Version = require("../models/Version");
 const User = require("../models/User");
 const authGuard = require("../middleware/auth");
+const { isAdmin } = require("../middleware/role");
 const { summarizeActive, ACTIVE_MODEL_STAGES } = require("../utils/modelSummary");
 const { serverError } = require("../utils/httpErrors");
 
@@ -73,11 +74,18 @@ router.get("/", authGuard, async (req, res) => {
       awaitingReview,
     };
 
-    if (req.user.role === "admin") {
-      const rows = await User.aggregate([
-        { $group: { _id: { role: "$role", active: { $ne: ["$isActive", false] } }, n: { $sum: 1 } } },
+    if (isAdmin(req.user)) {
+      // This organization's users (the tenant plugin scopes both queries). total/active/byRole count
+      // people who can be listed in Users (active or invited); `pending` are verified sign-ups
+      // waiting for approval; unverified accounts are counted nowhere.
+      const [rows, pending] = await Promise.all([
+        User.aggregate([
+          { $match: { status: { $in: ["active", "invited", null] } } }, // null: legacy rows without a status
+          { $group: { _id: { role: "$role", active: { $ne: ["$isActive", false] } }, n: { $sum: 1 } } },
+        ]),
+        User.countDocuments({ status: "pending" }),
       ]);
-      const users = { total: 0, active: 0, byRole: {} };
+      const users = { total: 0, active: 0, pending, byRole: {} };
       for (const r of rows) {
         users.total += r.n;
         if (r._id.active) users.active += r.n;

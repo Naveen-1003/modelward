@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const env = require("../config/env");
 const Version = require("../models/Version");
+const { runSystem } = require("../utils/tenant");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 30 * 1000;
@@ -101,14 +102,20 @@ async function sweepOrphans() {
   return removed;
 }
 
-async function runCleanupOnce() {
-  const cutoff = new Date(Date.now() - env.retentionDays * DAY_MS);
-  const { filesRemoved, versionsUpdated } = await purgeVersionFiles(cutoff);
-  const orphansRemoved = await sweepOrphans();
-  if (filesRemoved || orphansRemoved) {
-    console.log(`[cleanup] removed ${filesRemoved} retained file(s) from ${versionsUpdated} version(s) and ${orphansRemoved} orphan file(s)`);
-  }
-  return { filesRemoved, versionsUpdated, orphansRemoved };
+// The sweep covers every organization's files (one shared upload dir, and an orphan can only be
+// told from a referenced file by looking at ALL versions), so it runs under the system context.
+// It only unlinks files and clears the file paths of existing rows; it never reads or exposes
+// tenant data.
+function runCleanupOnce() {
+  return runSystem(async () => {
+    const cutoff = new Date(Date.now() - env.retentionDays * DAY_MS);
+    const { filesRemoved, versionsUpdated } = await purgeVersionFiles(cutoff);
+    const orphansRemoved = await sweepOrphans();
+    if (filesRemoved || orphansRemoved) {
+      console.log(`[cleanup] removed ${filesRemoved} retained file(s) from ${versionsUpdated} version(s) and ${orphansRemoved} orphan file(s)`);
+    }
+    return { filesRemoved, versionsUpdated, orphansRemoved };
+  });
 }
 
 async function safeRun() {

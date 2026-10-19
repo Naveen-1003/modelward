@@ -34,4 +34,19 @@ module.exports = [
   "drift_flagged",
   // collaboration
   "comment",
+  // organizations / multi-tenancy
+  "org_create",
+  "org_update",
+  "org_suspend",
+  "org_activate",
+  "org_access", // a super admin started working inside an organization
+  "code_update",
+  "code_regenerate",
+  "join_code_failed",
+  "email_verified",
+  "user_approve",
+  "user_reject",
+  "setup_link_issued",
+  "password_setup",
+  "cross_org_attempt", // an id of another organization was requested (answered 404)
 ];

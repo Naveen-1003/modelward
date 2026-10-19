@@ -4,10 +4,10 @@ const env = require("../config/env");
 const Model = require("../models/Model");
 const Version = require("../models/Version");
 const { runCleanupOnce, startCleanupJob } = require("../jobs/cleanup");
-const { connect, reset, disconnect, makeUser } = require("./helpers");
+const { connect, reset, disconnect, makeUser, makeOrg, sys } = require("./helpers");
 
 const DAY = 24 * 60 * 60 * 1000;
-let owner, model, seq = 0;
+let owner, model, org, seq = 0;
 
 function touch(name, ageDays = 0) {
   const file = path.join(env.uploadDir, name);
@@ -16,8 +16,8 @@ function touch(name, ageDays = 0) {
   fs.utimesSync(file, t, t);
   return file;
 }
-const mv = (extra) => Version.create({ modelId: model._id, versionNumber: (seq += 1), fileType: "csv", createdBy: owner.user._id, ...extra });
-const raw = (id) => Version.findById(id).setOptions({ includeDeleted: true }).lean();
+const mv = (extra) => Version.create({ orgId: org._id, modelId: model._id, versionNumber: (seq += 1), fileType: "csv", createdBy: owner.user._id, ...extra });
+const raw = (id) => sys(Version).findById(id).setOptions({ includeDeleted: true }).lean();
 // Backdate via the raw collection so hooks/timestamps can't interfere.
 const age = (id, days, field) =>
   Version.collection.updateOne({ _id: id }, { $set: { [field]: new Date(Date.now() - days * DAY) } });
@@ -25,8 +25,9 @@ const age = (id, days, field) =>
 beforeAll(async () => {
   await connect();
   await reset();
-  owner = await makeUser("ml_engineer");
-  model = await Model.create({ name: "Cleanup model", createdBy: owner.user._id });
+  org = await makeOrg();
+  owner = await makeUser("ml_engineer", { orgId: org._id });
+  model = await Model.create({ orgId: org._id, name: "Cleanup model", createdBy: owner.user._id });
 });
 beforeEach(() => {
   fs.rmSync(env.uploadDir, { recursive: true, force: true });

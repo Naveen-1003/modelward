@@ -2,13 +2,14 @@ const request = require("supertest");
 const app = require("../app");
 const Model = require("../models/Model");
 const Version = require("../models/Version");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, defaultOrg, auth } = require("./helpers");
 
-let eng, comp, admin;
+let eng, comp, admin, orgId;
 
 beforeAll(async () => {
   await connect();
   await reset();
+  orgId = (await defaultOrg())._id;
   eng = await makeUser("ml_engineer");
   comp = await makeUser("compliance_officer");
   admin = await makeUser("admin");
@@ -37,9 +38,9 @@ describe("GET /api/stats", () => {
   describe("seeded dataset", () => {
     beforeAll(async () => {
       const uid = eng.user._id;
-      const mk = (name) => Model.create({ name, createdBy: uid });
+      const mk = (name) => Model.create({ name, createdBy: uid, orgId });
       const mv = (m, n, status, riskTier) =>
-        Version.create({ modelId: m._id, versionNumber: n, fileType: "csv", createdBy: uid, status, riskTier });
+        Version.create({ modelId: m._id, versionNumber: n, fileType: "csv", createdBy: uid, orgId, status, riskTier });
 
       // Alpha: v2 deployed low is live, v3 draft high is latest -> display low
       const alpha = await mk("Alpha");
@@ -86,15 +87,24 @@ describe("GET /api/stats", () => {
 
     test("users only for admin", async () => {
       const a = await get(admin.token);
-      expect(a.body.users).toEqual({ total: 4, active: 3, byRole: { ml_engineer: 2, compliance_officer: 1, admin: 1 } });
+      expect(a.body.users).toEqual({ total: 4, active: 3, pending: 0, byRole: { ml_engineer: 2, compliance_officer: 1, admin: 1 } });
       expect((await get(eng.token)).body.users).toBeUndefined();
       expect((await get(comp.token)).body.users).toBeUndefined();
     });
 
+    test("users block: invited count in total, pending are reported apart, unverified are not counted", async () => {
+      await makeUser("ml_engineer", { status: "invited" });
+      await makeUser("compliance_officer", { status: "pending" });
+      await makeUser("ml_engineer", { status: "pending" });
+      await makeUser("ml_engineer", { status: "unverified" });
+      const a = await get(admin.token);
+      expect(a.body.users).toEqual({ total: 5, active: 4, pending: 2, byRole: { ml_engineer: 3, compliance_officer: 1, admin: 1 } });
+    });
+
     test("lists are capped at 10", async () => {
-      const m = await Model.create({ name: "Bulk", createdBy: eng.user._id });
+      const m = await Model.create({ name: "Bulk", createdBy: eng.user._id, orgId });
       await Version.insertMany(Array.from({ length: 12 }, (_, i) => ({
-        modelId: m._id, versionNumber: i + 1, fileType: "csv", createdBy: eng.user._id, status: "submitted",
+        modelId: m._id, versionNumber: i + 1, fileType: "csv", createdBy: eng.user._id, orgId, status: "submitted",
       })));
       const r = await get(eng.token);
       expect(r.body.awaitingReview).toHaveLength(10);

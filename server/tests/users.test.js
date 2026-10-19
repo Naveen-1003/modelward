@@ -1,5 +1,6 @@
 const request = require("supertest");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, makeOrg, auth, sys } = require("./helpers");
+const { hashToken } = require("../utils/identity");
 
 let app, User, AuditLog, rateLimit;
 
@@ -44,7 +45,7 @@ describe("list", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual(expect.objectContaining({ page: 1, limit: 25, total: 4, pages: 1 }));
     expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|\$2[aby]\$/);
-    expect(res.body.users[0]).toEqual(expect.objectContaining({ id: expect.any(String), isActive: true }));
+    expect(res.body.users[0]).toEqual(expect.objectContaining({ id: expect.any(String), isActive: true, status: "active" }));
 
     res = await auth(request(app).get("/api/users?limit=2&page=2"), token);
     expect(res.body.users).toHaveLength(2);
@@ -78,35 +79,72 @@ describe("list", () => {
   });
 });
 
-describe("create", () => {
-  test("admin creates any role without an invite code; audited; login works", async () => {
+describe("create (Add user: invited + setup link)", () => {
+  test("admin creates any org role without a password; invited; one-time setup link; audited; cannot sign in yet", async () => {
     const { token, user: admin } = await makeUser("admin");
     const res = await auth(request(app).post("/api/users"), token).send({
-      name: " New Admin ", email: "NewAdmin@Test.Local", password: "Password1!", role: "admin",
+      name: " New Admin ", email: "NewAdmin@Test.Local", role: "admin",
     });
     expect(res.status).toBe(201);
-    expect(res.body.user).toEqual(expect.objectContaining({ name: "New Admin", email: "newadmin@test.local", role: "admin", isActive: true }));
-    expect(JSON.stringify(res.body)).not.toContain("passwordHash");
+    expect(res.body.user).toEqual(expect.objectContaining({ name: "New Admin", email: "newadmin@test.local", role: "admin", isActive: true, status: "invited" }));
+    expect(String(res.body.user.orgId)).toBe(String(admin.orgId));
+    expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|setupTokenHash|\$2[aby]\$/);
+    // console provider: nothing left the server, so the link is handed back
+    expect(res.body.emailSent).toBe(false);
+    expect(res.body.setupLink).toMatch(/\/setup-password\?token=[a-f0-9]{64}$/);
 
-    const log = await AuditLog.findOne({ action: "create_user" });
+    // only the hash of that token is stored, valid for ~72 h
+    const rawToken = new URL(res.body.setupLink).searchParams.get("token");
+    const stored = await sys(User).findById(res.body.user.id).select("+setupTokenHash");
+    expect(stored.setupTokenHash).toBe(hashToken(rawToken));
+    expect(stored.setupTokenHash).not.toBe(rawToken);
+    const hours = (stored.setupExpiresAt.getTime() - Date.now()) / 3600000;
+    expect(hours).toBeGreaterThan(71.9);
+    expect(hours).toBeLessThanOrEqual(72);
+
+    const log = await sys(AuditLog).findOne({ action: "create_user" });
     expect(log.actorId.toString()).toBe(String(admin._id));
     expect(log.targetId.toString()).toBe(res.body.user.id);
+    expect(String(log.orgId)).toBe(String(admin.orgId));
+    expect(log.details).not.toContain(rawToken);
 
+    // no password exists yet: a login attempt fails like any wrong password
     const login = await request(app).post("/api/auth/login").send({ email: "newadmin@test.local", password: "Password1!" });
-    expect(login.status).toBe(200);
+    expect(login.status).toBe(401);
+  });
+
+  test("a password in the body is ignored (there is no password field any more)", async () => {
+    const { token } = await makeUser("admin");
+    const res = await auth(request(app).post("/api/users"), token).send({ name: "P", email: "p@test.local", role: "ml_engineer", password: "Password1!" });
+    expect(res.status).toBe(201);
+    const login = await request(app).post("/api/auth/login").send({ email: "p@test.local", password: "Password1!" });
+    expect(login.status).toBe(401);
   });
 
   test("validation + duplicates", async () => {
     const { token } = await makeUser("admin");
     const post = (b) => auth(request(app).post("/api/users"), token).send(b);
-    const ok = { name: "A", email: "a@test.local", password: "Password1!", role: "ml_engineer" };
+    const ok = { name: "A", email: "a@test.local", role: "ml_engineer" };
     expect((await post({ ...ok, email: { $gt: "" } })).status).toBe(400);
     expect((await post({ ...ok, email: "nope" })).status).toBe(400);
-    expect((await post({ ...ok, password: "short" })).status).toBe(400);
     expect((await post({ ...ok, role: "root" })).status).toBe(400);
+    expect((await post({ ...ok, role: "super_admin" })).status).toBe(400);
+    expect((await post({ ...ok, role: undefined })).status).toBe(400);
     expect((await post({ ...ok, name: "x".repeat(101) })).status).toBe(400);
+    expect((await post({ ...ok, name: "" })).status).toBe(400);
+    expect((await post({ ...ok, allowExternalEmail: "yes" })).status).toBe(400);
     expect((await post(ok)).status).toBe(201);
     expect((await post({ ...ok, email: "A@TEST.local" })).status).toBe(409);
+    // "one person, one account": a +tag alias is the same account
+    expect((await post({ ...ok, email: "a+hr@test.local" })).status).toBe(409);
+  });
+
+  test("an email that exists in ANOTHER organization is a 409 too (global uniqueness)", async () => {
+    const other = await makeOrg({ allowedDomains: ["other.local"] });
+    await makeUser("ml_engineer", { orgId: other._id, email: "taken@test.local" });
+    const { token } = await makeUser("admin");
+    const res = await auth(request(app).post("/api/users"), token).send({ name: "T", email: "taken@test.local", role: "ml_engineer" });
+    expect(res.status).toBe(409);
   });
 });
 
@@ -130,7 +168,7 @@ describe("patch", () => {
     expect(res.body.user.isActive).toBe(true);
     expect((await auth(request(app).get("/api/auth/me"), userToken)).status).toBe(200);
 
-    const logs = await AuditLog.find({ action: "update_user" }).sort({ seq: 1 });
+    const logs = await sys(AuditLog).find({ action: "update_user" }).sort({ seq: 1 });
     expect(logs).toHaveLength(3);
     expect(logs[0].details).toMatch(/role ml_engineer -> compliance_officer/);
     expect(logs[1].details).toMatch(/isActive true -> false/);
@@ -141,7 +179,7 @@ describe("patch", () => {
     const { user } = await makeUser("ml_engineer", { name: "Same" });
     const res = await auth(request(app).patch(`/api/users/${user._id}`), token).send({ name: "Same", isActive: true });
     expect(res.status).toBe(200);
-    expect(await AuditLog.countDocuments({ action: "update_user" })).toBe(0);
+    expect(await sys(AuditLog).countDocuments({ action: "update_user" })).toBe(0);
   });
 
   test("validation: empty body, bad types, bad id, unknown id", async () => {
@@ -169,7 +207,7 @@ describe("patch", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/deactivate your own/);
     expect((await p({ role: "admin", name: "Renamed" })).status).toBe(200);
-    expect((await User.findById(admin._id)).role).toBe("admin");
+    expect((await sys(User).findById(admin._id)).role).toBe("admin");
   });
 
   test("admins can demote/deactivate each other while another active admin remains", async () => {
@@ -181,7 +219,7 @@ describe("patch", () => {
     expect((await auth(request(app).get("/api/users"), b.token)).status).toBe(403);
     // and a (the only admin left) cannot touch itself, so the system keeps >= 1 admin
     expect((await auth(request(app).patch(`/api/users/${a.user._id}`), a.token).send({ role: "ml_engineer" })).status).toBe(400);
-    expect(await User.countDocuments({ role: "admin", isActive: true })).toBe(1);
+    expect(await sys(User).countDocuments({ role: "admin", isActive: true })).toBe(1);
   });
 
   test("deactivated admins stop counting; the sole remaining admin is protected by the self guard", async () => {
@@ -191,7 +229,7 @@ describe("patch", () => {
     const patch = (who, id, body) => auth(request(app).patch(`/api/users/${id}`), who.token).send(body);
     expect((await patch(a, b.user._id, { isActive: false })).status).toBe(200);
     expect((await patch(a, c.user._id, { isActive: false })).status).toBe(200); // a remains
-    expect(await User.countDocuments({ role: "admin", isActive: true })).toBe(1);
+    expect(await sys(User).countDocuments({ role: "admin", isActive: true })).toBe(1);
     // the sole remaining admin is protected by the self guard
     expect((await patch(a, a.user._id, { isActive: false })).status).toBe(400);
   });

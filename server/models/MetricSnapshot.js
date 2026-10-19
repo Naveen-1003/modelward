@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const { RISK_TIERS } = require("./Version");
+const { tenantPlugin } = require("../utils/tenant");
 
 const SNAPSHOT_SOURCES = ["baseline", "simulated", "batch"];
 
@@ -18,6 +19,8 @@ const metricSnapshotSchema = new mongoose.Schema({
   rows: { type: Number, default: null },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 }, { timestamps: { createdAt: true, updatedAt: false } });
+
+metricSnapshotSchema.plugin(tenantPlugin);
 
 metricSnapshotSchema.index({ versionId: 1, createdAt: 1 });
 

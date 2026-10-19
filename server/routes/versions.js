@@ -20,6 +20,7 @@ const { nextSnapshot, evaluateSnapshot } = require("../utils/drift");
 const { getThresholds } = require("../utils/settings");
 const { removeFiles, finalizeAfterScoring, sanitizeDownloadName, fileExists } = require("../utils/fileStore");
 const { paginationFields, pageWindow, envelope, escapeRegex } = require("../utils/query");
+const { logCrossOrg } = require("../utils/crossOrg");
 
 const router = express.Router();
 router.param("id", validId);
@@ -41,11 +42,15 @@ const filePaths = (...files) => files.filter(Boolean).map((f) => f.path);
 const uploadedFiles = (req) => Object.values(req.files || {}).flat().concat(req.file ? [req.file] : []);
 
 // id -> display name for createdBy / reviewedBy / snapshot authors, in ONE query.
-async function nameMap(ids) {
+// User is tenant-scoped, so only the organization's own users resolve; a super admin (no
+// organization of their own) is therefore passed in through `known` (the caller, req.user).
+async function nameMap(ids, known = []) {
   const unique = [...new Set(ids.filter(Boolean).map(String))];
   if (!unique.length) return new Map();
   const users = await User.find({ _id: { $in: unique } }).select("name").lean();
-  return new Map(users.map((u) => [String(u._id), u.name]));
+  const names = new Map(users.map((u) => [String(u._id), u.name]));
+  for (const u of known) if (u && unique.includes(String(u._id)) && !names.has(String(u._id))) names.set(String(u._id), u.name);
+  return names;
 }
 
 // Version JSON (filePath / datasetPath never appear: see Version's toJSON) + display names.
@@ -61,9 +66,15 @@ const presentVersion = async (v) => (await presentVersions([v]))[0];
 
 // A version is only actionable while neither it nor its model is archived
 // (the soft-delete plugin makes both lookups return null otherwise).
-async function loadActive(id) {
+// A version that does not exist in the caller's organization is a miss; if it exists in another
+// one, logCrossOrg also audits the probe (kind "File" for the file download).
+async function loadActive(req, kind = "Version") {
+  const id = req.params.id;
   const version = await Version.findById(id);
-  if (!version) return null;
+  if (!version) {
+    await logCrossOrg(req, kind, id);
+    return null;
+  }
   const model = await Model.findById(version.modelId);
   if (!model) return null;
   return { version, model };
@@ -92,6 +103,17 @@ const notFound = (res) => res.status(404).json({ error: "Version not found" });
 function notOwner(req, res, version, what) {
   if (req.user.role === "ml_engineer" && String(version.createdBy) !== String(req.user._id)) {
     res.status(403).json({ error: `Only the engineer who uploaded this version can ${what} it` });
+    return true;
+  }
+  return false;
+}
+
+// Separation of duties: whoever uploaded a version can never review it (approve / reject / request
+// changes / deploy / retire / resolve a drift review), whatever their role is today.
+// Returns true when it already sent the 403.
+function ownVersion(req, res, version) {
+  if (String(version.createdBy) === String(req.user._id)) {
+    res.status(403).json({ error: "You cannot review a version you uploaded" });
     return true;
   }
   return false;
@@ -180,7 +202,10 @@ router.post("/models/:modelId/versions", authGuard, roleGuard(["ml_engineer"]), 
 
   try {
     const model = await Model.findById(req.params.modelId);
-    if (!model) return reject(404, { error: "Model not found" });
+    if (!model) {
+      await logCrossOrg(req, "Model", req.params.modelId);
+      return reject(404, { error: "Model not found" });
+    }
 
     const fields = parse(uploadFieldsSchema, req.body, res);
     if (!fields) return;
@@ -311,7 +336,7 @@ router.post("/versions/:id/retry", authGuard, roleGuard(["ml_engineer"]), async 
   let baselineId = null;
   let filesDiscarded = false;
   try {
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req);
     if (!ctx) return notFound(res);
     const { version, model } = ctx;
     if (notOwner(req, res, version, "retry scoring for")) return;
@@ -415,7 +440,10 @@ router.post("/versions/:id/retry", authGuard, roleGuard(["ml_engineer"]), async 
 router.get("/models/:modelId/versions", authGuard, async (req, res) => {
   try {
     const model = await Model.findById(req.params.modelId).select("_id").lean();
-    if (!model) return res.status(404).json({ error: "Model not found" });
+    if (!model) {
+      await logCrossOrg(req, "Model", req.params.modelId);
+      return res.status(404).json({ error: "Model not found" });
+    }
     const versions = await Version.find({ modelId: model._id }).sort({ versionNumber: -1 });
     res.json({ versions: await presentVersions(versions) });
   } catch (err) {
@@ -481,7 +509,7 @@ router.get("/versions/:id", authGuard, async (req, res) => {
     const snapshots = await MetricSnapshot.find({ versionId: version._id }).sort({ createdAt: 1, _id: 1 });
     const compliance = scoreCompliance(version, snapshots[snapshots.length - 1] || null);
 
-    const names = await nameMap(snapshots.map((s) => s.createdBy));
+    const names = await nameMap(snapshots.map((s) => s.createdBy), [req.user]);
     res.json({
       version: await presentVersion(version),
       compliance,
@@ -506,7 +534,7 @@ router.patch("/versions/:id/notes", authGuard, roleGuard(["ml_engineer"]), async
     if (data.trainingNotes !== undefined) set.trainingNotes = data.trainingNotes;
     if (!Object.keys(set).length) return res.status(400).json({ error: "Provide datasetNotes and/or trainingNotes" });
 
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req);
     if (!ctx) return notFound(res);
     if (notOwner(req, res, ctx.version, "edit the notes of")) return;
     const version = await transition(ctx.version._id, ["draft", "changes_requested"], set);
@@ -530,7 +558,7 @@ router.patch("/versions/:id/notes", authGuard, roleGuard(["ml_engineer"]), async
 // ---------------------------------------------------------------------------
 router.post("/versions/:id/submit", authGuard, roleGuard(["ml_engineer"]), async (req, res) => {
   try {
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req);
     if (!ctx) return notFound(res);
     if (notOwner(req, res, ctx.version, "submit")) return;
     const version = await transition(ctx.version._id, ["draft", "changes_requested"], { status: "submitted" });
@@ -551,7 +579,7 @@ router.post("/versions/:id/submit", authGuard, roleGuard(["ml_engineer"]), async
 
 router.post("/versions/:id/withdraw", authGuard, roleGuard(["ml_engineer"]), async (req, res) => {
   try {
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req);
     if (!ctx) return notFound(res);
     if (notOwner(req, res, ctx.version, "withdraw")) return;
     const version = await transition(ctx.version._id, ["submitted"], { status: "draft" });
@@ -591,9 +619,10 @@ router.post("/versions/:id/review", authGuard, roleGuard(["compliance_officer"])
     if (!data) return;
     const comment = data.comment || "";
 
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req);
     if (!ctx) return notFound(res);
     const { version: current, model } = ctx;
+    if (ownVersion(req, res, current)) return;
     if (current.status !== "submitted") {
       return res.status(400).json({ error: `Version is not awaiting review (status: '${current.status}')`, currentStatus: current.status });
     }
@@ -636,9 +665,10 @@ router.post("/versions/:id/review", authGuard, roleGuard(["compliance_officer"])
 // ---------------------------------------------------------------------------
 router.post("/versions/:id/deploy", authGuard, roleGuard(["compliance_officer", "admin"]), async (req, res) => {
   try {
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req);
     if (!ctx) return notFound(res);
     const { version: current, model } = ctx;
+    if (ownVersion(req, res, current)) return;
     if (current.status !== "approved") {
       return res.status(400).json({ error: `Only approved versions can be deployed (status: '${current.status}')`, currentStatus: current.status });
     }
@@ -713,8 +743,9 @@ router.post("/versions/:id/retire", authGuard, roleGuard(["compliance_officer", 
   try {
     const data = parse(commentOnlySchema, req.body, res);
     if (!data) return;
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req);
     if (!ctx) return notFound(res);
+    if (ownVersion(req, res, ctx.version)) return;
     const version = await transition(ctx.version._id, LIVE_STATUSES, { status: "retired" });
     if (!version) return illegal(res, ctx.version._id, "retire");
 
@@ -744,8 +775,9 @@ router.post("/versions/:id/resolve-review", authGuard, roleGuard(["compliance_of
   try {
     const data = parse(resolveSchema, req.body, res);
     if (!data) return;
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req);
     if (!ctx) return notFound(res);
+    if (ownVersion(req, res, ctx.version)) return;
     const to = data.decision === "keep" ? "deployed" : "retired";
     const set = { status: to };
     if (data.decision === "keep") {
@@ -781,8 +813,8 @@ router.post("/versions/:id/resolve-review", authGuard, roleGuard(["compliance_of
 // ---------------------------------------------------------------------------
 const snapshotLimitMsg = `Snapshot limit reached (${MAX_SNAPSHOTS} per version)`;
 
-async function liveContext(id) {
-  const ctx = await loadActive(id);
+async function liveContext(req) {
+  const ctx = await loadActive(req);
   if (!ctx) return { error: [404, "Version not found"] };
   if (!LIVE_STATUSES.includes(ctx.version.status)) {
     return { error: [400, "Only deployed versions can be monitored for drift"] };
@@ -862,7 +894,7 @@ async function recordSnapshot({ version, model, user, baseline, metrics, evaluat
 router.post("/versions/:id/simulate-drift", authGuard, async (req, res) => {
   try {
     if (!env.enableDriftSimulation) return res.status(403).json({ error: "Drift simulation is disabled on this deployment" });
-    const ctx = await liveContext(req.params.id);
+    const ctx = await liveContext(req);
     if (ctx.error) return res.status(ctx.error[0]).json({ error: ctx.error[1] });
     const { version, model, baseline, last } = ctx;
 
@@ -907,7 +939,7 @@ router.post("/versions/:id/monitoring-batch", authGuard, uploadBatchFile, async 
       if (latency === null) return res.status(400).json({ error: `latencyMs: ${LATENCY_MSG}`, fields: { latencyMs: LATENCY_MSG } });
     }
 
-    const ctx = await liveContext(req.params.id);
+    const ctx = await liveContext(req);
     if (ctx.error) return res.status(ctx.error[0]).json({ error: ctx.error[1] });
     const { version, model, baseline, last } = ctx;
 
@@ -949,7 +981,7 @@ router.delete("/versions/:id", authGuard, roleGuard(["ml_engineer", "admin"]), a
   try {
     const data = parse(reasonSchema, req.body, res);
     if (!data) return;
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req);
     if (!ctx) return notFound(res);
     const { version: current, model } = ctx;
     if (req.user.role === "ml_engineer" && String(current.createdBy) !== String(req.user._id)) {
@@ -990,7 +1022,10 @@ router.delete("/versions/:id", authGuard, roleGuard(["ml_engineer", "admin"]), a
 router.post("/versions/:id/restore", authGuard, roleGuard(["ml_engineer", "admin"]), async (req, res) => {
   try {
     const current = await Version.findById(req.params.id).setOptions({ includeDeleted: true });
-    if (!current) return notFound(res);
+    if (!current) {
+      await logCrossOrg(req, "Version", req.params.id);
+      return notFound(res);
+    }
     if (req.user.role === "ml_engineer" && String(current.createdBy) !== String(req.user._id)) {
       return res.status(403).json({ error: "Only the engineer who uploaded this version (or an admin) can restore it" });
     }
@@ -1025,7 +1060,7 @@ router.get("/versions/:id/file", authGuard, async (req, res) => {
     const q = parse(fileQuerySchema, req.query, res);
     if (!q) return;
     const which = q.which || "model";
-    const ctx = await loadActive(req.params.id);
+    const ctx = await loadActive(req, "File");
     if (!ctx) return notFound(res);
     const { version, model } = ctx;
 

@@ -48,9 +48,14 @@ function digest(payload, alg) {
 // Canonical hash input. Order and types are part of the contract: verify() must
 // reproduce exactly what writeAuditLog() hashed. `alg` defaults to the entry's own
 // hashAlg (legacy rows have none => sha256).
+//
+// chainV 2 (multi-organization) appends the entry's orgId to the hashed array. Rows without
+// chainV hash EXACTLY as before, even after the migration backfilled an orgId onto them, so
+// the old chain keeps verifying. Dropping chainV from a v2 row changes its hash input, which
+// verifyChain reports as a modified entry.
 function computeHash(entry, alg) {
   const { seq, prevHash, actorName, actorRole, actorId, action, targetType, targetId, details, createdAt } = entry;
-  const payload = JSON.stringify([
+  const fields = [
     seq,
     wellFormed(prevHash),
     wellFormed(actorName),
@@ -61,7 +66,9 @@ function computeHash(entry, alg) {
     targetId ? String(targetId) : null,
     wellFormed(details || ""),
     new Date(createdAt).toISOString(),
-  ]);
+  ];
+  if (entry.chainV === 2) fields.push(entry.orgId ? String(entry.orgId) : null);
+  const payload = JSON.stringify(fields);
   return digest(payload, alg || entry.hashAlg || "sha256");
 }
 
@@ -97,7 +104,8 @@ async function verifyChain(AuditLog, batchSize = 1000) {
   };
 
   for (;;) {
-    const batch = await AuditLog.find({ seq: { $gt: lastSeq } }).sort({ seq: 1 }).limit(batchSize).lean();
+    // The chain is ONE global sequence across all organizations, so it is read cross-tenant.
+    const batch = await AuditLog.find({ seq: { $gt: lastSeq } }).setOptions({ bypassTenant: true }).sort({ seq: 1 }).limit(batchSize).lean();
     if (batch.length === 0) break;
     for (const doc of batch) {
       let linkExplainedByGap = false;

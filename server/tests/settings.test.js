@@ -1,5 +1,6 @@
 const request = require("supertest");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { runWithOrg } = require("../utils/tenant");
+const { connect, reset, disconnect, makeUser, defaultOrg, sys, auth } = require("./helpers");
 
 let app, Settings, AuditLog, User, getThresholds, DEFAULT_THRESHOLDS;
 
@@ -19,6 +20,9 @@ beforeAll(async () => {
 afterAll(disconnect);
 beforeEach(fresh);
 
+// getThresholds(orgId) reads Settings, which is tenant-scoped: outside a request it needs a context.
+const thresholds = (orgId) => runWithOrg(orgId, () => getThresholds(orgId));
+
 const good = { lowAccuracy: 0.9, lowFairnessGap: 0.05, mediumAccuracy: 0.75, mediumFairnessGap: 0.15, driftThreshold: 0.08 };
 
 describe("GET", () => {
@@ -30,7 +34,7 @@ describe("GET", () => {
       expect(res.status).toBe(200);
       expect(res.body.settings).toEqual(expect.objectContaining({ ...DEFAULT_THRESHOLDS, updatedAt: null, updatedBy: null }));
     }
-    expect(await getThresholds()).toEqual({ ...DEFAULT_THRESHOLDS });
+    expect(await thresholds((await defaultOrg())._id)).toEqual({ ...DEFAULT_THRESHOLDS });
   });
 });
 
@@ -40,11 +44,12 @@ describe("PUT", () => {
       const { token } = await makeUser(role);
       expect((await auth(request(app).put("/api/settings"), token).send(good)).status).toBe(403);
     }
-    expect(await Settings.countDocuments()).toBe(0);
+    expect(await sys(Settings).countDocuments()).toBe(0);
   });
 
-  test("admin saves; GET + getThresholds reflect it at once; singleton; audited with before->after", async () => {
+  test("admin saves; GET + getThresholds reflect it at once; one document per org; audited with before->after", async () => {
     const { token, user } = await makeUser("admin", { name: "Boss" });
+    const orgId = (await defaultOrg())._id;
     let res = await auth(request(app).put("/api/settings"), token).send(good);
     expect(res.status).toBe(200);
     expect(res.body.settings).toEqual(expect.objectContaining({ ...good, updatedBy: String(user._id) }));
@@ -52,15 +57,16 @@ describe("PUT", () => {
 
     res = await auth(request(app).get("/api/settings"), token);
     expect(res.body.settings).toEqual(expect.objectContaining(good));
-    expect(await getThresholds()).toEqual(good);
+    expect(await thresholds(orgId)).toEqual(good);
 
     await auth(request(app).put("/api/settings"), token).send({ ...good, driftThreshold: 0.2 });
-    expect(await Settings.countDocuments()).toBe(1);
-    expect((await Settings.findOne()).key).toBe("global");
-    expect((await getThresholds()).driftThreshold).toBe(0.2);
+    expect(await sys(Settings).countDocuments()).toBe(1);
+    expect(String((await sys(Settings).findOne()).orgId)).toBe(String(orgId));
+    expect((await thresholds(orgId)).driftThreshold).toBe(0.2);
 
-    const logs = await AuditLog.find({ action: "update_settings" }).sort({ seq: 1 });
+    const logs = await sys(AuditLog).find({ action: "update_settings" }).sort({ seq: 1 });
     expect(logs).toHaveLength(2);
+    expect(logs.every((l) => String(l.orgId) === String(orgId))).toBe(true);
     expect(logs[0].details).toContain("lowAccuracy 0.85->0.9");
     expect(logs[1].details).toBe("Thresholds changed: driftThreshold 0.08->0.2");
     expect(logs[1].actorName).toBe("Boss");
@@ -83,7 +89,7 @@ describe("PUT", () => {
     const res = await auth(request(app).put("/api/settings"), token).send(body);
     expect(res.status).toBe(400);
     expect(res.body.error).toEqual(expect.any(String));
-    expect(await Settings.countDocuments()).toBe(0);
+    expect(await sys(Settings).countDocuments()).toBe(0);
   });
 
   test("boundary values are accepted (equal tiers, 1.0)", async () => {

@@ -52,6 +52,7 @@ app.use("/api", apiLimiter);
 
 app.use("/api/config", require("./routes/config"));
 app.use("/api/auth", require("./routes/auth"));
+app.use("/api/orgs", require("./routes/orgs"));
 app.use("/api/users", require("./routes/users"));
 app.use("/api/settings", require("./routes/settings"));
 app.use("/api/models", require("./routes/models"));

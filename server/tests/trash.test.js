@@ -2,15 +2,16 @@ const request = require("supertest");
 const app = require("../app");
 const Model = require("../models/Model");
 const Version = require("../models/Version");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, defaultOrg, auth } = require("./helpers");
 
-let eng, comp, admin;
-const mk = (name, owner) => Model.create({ name, createdBy: owner._id });
-const mv = (model, n, extra = {}) => Version.create({ modelId: model._id, versionNumber: n, fileType: "csv", createdBy: eng.user._id, ...extra });
+let eng, comp, admin, orgId;
+const mk = (name, owner) => Model.create({ name, createdBy: owner._id, orgId });
+const mv = (model, n, extra = {}) => Version.create({ modelId: model._id, versionNumber: n, fileType: "csv", createdBy: eng.user._id, orgId, ...extra });
 
 beforeAll(async () => {
   await connect();
   await reset();
+  orgId = (await defaultOrg())._id;
   eng = await makeUser("ml_engineer");
   comp = await makeUser("compliance_officer");
   admin = await makeUser("admin", { name: "Ada Admin" });

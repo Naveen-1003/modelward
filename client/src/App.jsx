@@ -8,6 +8,8 @@ import ProtectedRoute from "./components/ProtectedRoute.jsx";
 
 import Login from "./pages/Login.jsx";
 import Signup from "./pages/Signup.jsx";
+import VerifyEmail from "./pages/VerifyEmail.jsx";
+import SetupPassword from "./pages/SetupPassword.jsx";
 import MLDashboard from "./pages/MLDashboard.jsx";
 import ModelDetail from "./pages/ModelDetail.jsx";
 import ComplianceDashboard from "./pages/ComplianceDashboard.jsx";
@@ -30,6 +32,9 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        {/* One-time links: public, and usable while signed in (no redirect). */}
+        <Route path="/verify-email" element={<VerifyEmail />} />
+        <Route path="/setup-password" element={<SetupPassword />} />
 
         <Route
           path="/ml"
@@ -58,7 +63,7 @@ export default function App() {
         <Route
           path="/admin"
           element={
-            <ProtectedRoute roles={["admin"]}>
+            <ProtectedRoute roles={["admin", "super_admin"]}>
               <AdminDashboard />
             </ProtectedRoute>
           }

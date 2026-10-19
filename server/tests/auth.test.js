@@ -1,16 +1,18 @@
 const request = require("supertest");
 const express = require("express");
 const mongoose = require("mongoose");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, makeOrg, sys, auth } = require("./helpers");
 
-let app, env, User, AuditLog, rateLimit;
+let app, env, User, AuditLog, Organization, rateLimit, email, org;
 
 // reset() drops the DB; index creation is the migrations job (owned elsewhere), but
 // our tests must not depend on its timing, so rebuild the indexes we rely on here.
 async function fresh() {
   await reset();
-  await Promise.all([User.createIndexes(), AuditLog.createIndexes()]);
+  await Promise.all([User.createIndexes(), AuditLog.createIndexes(), Organization.createIndexes()]);
   rateLimit.resetAll();
+  email.clearOutbox();
+  org = await makeOrg({ name: "Signup Test Org", allowedDomains: ["test.local"] });
 }
 
 beforeAll(async () => {
@@ -19,69 +21,66 @@ beforeAll(async () => {
   env = require("../config/env");
   User = require("../models/User");
   AuditLog = require("../models/AuditLog");
+  Organization = require("../models/Organization");
   rateLimit = require("../middleware/rateLimit");
+  email = require("../utils/email");
 });
 afterAll(disconnect);
 beforeEach(fresh);
 
 const signup = (body) => request(app).post("/api/auth/signup").send(body);
-const valid = (over = {}) => ({ name: "Ada", email: "ada@test.local", password: "Password1!", role: "ml_engineer", ...over });
+const valid = (over = {}) => ({ name: "Ada", email: "ada@test.local", joinCode: org.codes.ml_engineer.value, ...over });
+const findUser = (filter) => sys(User).findOne(filter);
+const logs = (filter) => sys(AuditLog).find(filter).sort({ seq: 1 });
 
-describe("signup gating", () => {
-  const saved = {};
-  beforeEach(() => {
-    saved.admin = env.adminInviteCode;
-    saved.comp = env.complianceInviteCode;
-  });
-  afterEach(() => {
-    env.adminInviteCode = saved.admin;
-    env.complianceInviteCode = saved.comp;
-  });
-
-  test("ml_engineer is open and returns token + safe user", async () => {
+describe("signup gating (join codes)", () => {
+  test("a valid code creates an unverified account: no token, no user object, no secrets", async () => {
     const res = await signup(valid());
     expect(res.status).toBe(201);
-    expect(res.body.token).toEqual(expect.any(String));
-    expect(res.body.user).toEqual(expect.objectContaining({ email: "ada@test.local", role: "ml_engineer", isActive: true }));
-    expect(Object.keys(res.body.user).sort()).toEqual(["createdAt", "email", "id", "isActive", "name", "role"]);
+    expect(res.body.token).toBeUndefined();
+    expect(res.body.user).toBeUndefined();
+    expect(Object.keys(res.body).sort()).toEqual(["devVerifyUrl", "emailSent", "message", "status"]);
+    expect(res.body).toMatchObject({ status: "unverified", emailSent: true });
+    const user = await findUser({ email: "ada@test.local" });
+    expect(user).toMatchObject({ role: "ml_engineer", status: "unverified" });
+    expect(String(user.orgId)).toBe(String(org._id));
+  });
+
+  test("wrong / missing / malformed code => the same generic 403; nothing is created", async () => {
+    const bodies = [];
+    for (const joinCode of ["ABCDEFGHJKLM", "nope", "test-admin-code", org.codes.ml_engineer.value.slice(1)]) {
+      const res = await signup(valid({ joinCode }));
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ error: "Invalid code or email not eligible" });
+      expect(JSON.stringify(res.body)).not.toContain(org.codes.ml_engineer.value);
+      bodies.push(res.text);
+    }
+    expect(new Set(bodies).size).toBe(1);
+    const missing = await signup(valid({ joinCode: undefined }));
+    expect(missing.status).toBe(400); // a missing field is a validation error, not a guess
+    expect(await sys(User).countDocuments()).toBe(0);
   });
 
   test.each([
-    ["admin", () => env.adminInviteCode],
-    ["compliance_officer", () => env.complianceInviteCode],
-  ])("%s: missing / wrong code => 403, right code => 201", async (role, code) => {
-    let res = await signup(valid({ role }));
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe("Invalid invite code");
-
-    res = await signup(valid({ role, inviteCode: "nope" }));
-    expect(res.status).toBe(403);
-    expect(JSON.stringify(res.body)).not.toContain(code());
-    expect(await User.countDocuments()).toBe(0);
-
-    res = await signup(valid({ role, inviteCode: code() }));
+    ["ml_engineer", "ml_engineer"],
+    ["compliance_officer", "compliance_officer"],
+  ])("the %s code gives the %s role", async (kind, role) => {
+    const res = await signup(valid({ joinCode: org.codes[kind].value }));
     expect(res.status).toBe(201);
-    expect(res.body.user.role).toBe(role);
+    expect((await findUser({ email: "ada@test.local" })).role).toBe(role);
   });
 
-  test("role is disabled when its env code is unset (even if a code is sent)", async () => {
-    env.adminInviteCode = "";
-    env.complianceInviteCode = "";
-    for (const role of ["admin", "compliance_officer"]) {
-      for (const inviteCode of [undefined, "", "anything"]) {
-        const res = await signup(valid({ role, inviteCode }));
-        expect(res.status).toBe(403);
-        expect(res.body.error).toBe("Signup for this role is disabled");
-      }
+  test("the body has no role: whatever it says is ignored (admin / super_admin / garbage)", async () => {
+    for (const [i, role] of ["admin", "super_admin", "superuser", { $ne: "x" }].entries()) {
+      const res = await signup(valid({ email: `r${i}@test.local`, role }));
+      expect(res.status).toBe(201);
+      expect((await findUser({ email: `r${i}@test.local` })).role).toBe("ml_engineer");
     }
-    expect(await User.countDocuments()).toBe(0);
   });
 
-  test("admin code does not unlock compliance_officer and vice versa", async () => {
-    let res = await signup(valid({ role: "compliance_officer", inviteCode: env.adminInviteCode }));
-    expect(res.status).toBe(403);
-    res = await signup(valid({ role: "admin", inviteCode: env.complianceInviteCode }));
-    expect(res.status).toBe(403);
+  test("the old environment invite codes are gone", () => {
+    expect(env.adminInviteCode).toBeUndefined();
+    expect(env.complianceInviteCode).toBeUndefined();
   });
 });
 
@@ -90,21 +89,28 @@ describe("signup validation", () => {
     ["email operator object", { email: { $gt: "" } }],
     ["email number", { email: 5 }],
     ["not-an-email", { email: "not-an-email" }],
-    ["password too short", { password: "short" }],
-    ["password too long", { password: "x".repeat(129) }],
-    ["password object", { password: { $ne: "" } }],
     ["name empty", { name: "   " }],
     ["name too long", { name: "n".repeat(101) }],
     ["name object", { name: { $gt: "" } }],
-    ["bad role", { role: "superuser" }],
-    ["role object", { role: { $ne: "x" } }],
-    ["inviteCode object", { inviteCode: { $ne: "" } }],
+    ["joinCode object", { joinCode: { $ne: "" } }],
+    ["joinCode empty", { joinCode: "" }],
     ["email too long", { email: `${"a".repeat(250)}@test.local` }],
   ])("%s => 400", async (_label, over) => {
     const res = await signup(valid(over));
     expect(res.status).toBe(400);
     expect(res.body.error).toEqual(expect.any(String));
     expect(res.body.fields).toBeDefined();
+    expect(await sys(User).countDocuments()).toBe(0);
+  });
+
+  test("the signup form takes no password: a weak or strong one is ignored and never becomes the account's password", async () => {
+    const res = await signup(valid({ password: "short" }));
+    expect(res.status).toBe(201);
+    const bcrypt = require("bcryptjs");
+    const user = await findUser({ email: "ada@test.local" });
+    expect(await bcrypt.compare("short", user.passwordHash)).toBe(false);
+    const login = await request(app).post("/api/auth/login").send({ email: "ada@test.local", password: "short" });
+    expect(login.status).toBe(401);
   });
 
   test("missing body fields => 400", async () => {
@@ -112,26 +118,30 @@ describe("signup validation", () => {
     expect(res.status).toBe(400);
   });
 
-  test("duplicate email => 409, case-insensitively", async () => {
+  test("duplicate email => 409, case-insensitively (once the first account is verified)", async () => {
     expect((await signup(valid())).status).toBe(201);
+    await sys(User).updateOne({ email: "ada@test.local" }, { status: "pending" });
     expect((await signup(valid())).status).toBe(409);
     expect((await signup(valid({ email: "ADA@Test.Local" }))).status).toBe(409);
-    expect(await User.countDocuments()).toBe(1);
+    expect(await sys(User).countDocuments()).toBe(1);
   });
 
   test("email is lowercased and trimmed; name trimmed", async () => {
     const res = await signup(valid({ email: "  Mixed@Test.Local ", name: "  Bob  " }));
     expect(res.status).toBe(201);
-    expect(res.body.user.email).toBe("mixed@test.local");
-    expect(res.body.user.name).toBe("Bob");
+    const user = await findUser({ email: "mixed@test.local" });
+    expect(user.name).toBe("Bob");
+    expect(user.emailKey).toBe("mixed@test.local");
   });
 
   test("signup is audited with the new user as actor", async () => {
-    const res = await signup(valid());
-    const log = await AuditLog.findOne({ action: "signup" });
+    await signup(valid());
+    const user = await findUser({ email: "ada@test.local" });
+    const log = await sys(AuditLog).findOne({ action: "signup" });
     expect(log.actorName).toBe("Ada");
     expect(log.actorRole).toBe("ml_engineer");
-    expect(String(log.targetId)).toBe(res.body.user.id);
+    expect(String(log.targetId)).toBe(String(user._id));
+    expect(String(log.orgId)).toBe(String(org._id));
     expect(log.seq).toBe(1);
   });
 });
@@ -142,10 +152,11 @@ describe("login", () => {
     const res = await request(app).post("/api/auth/login").send({ email: "U1@test.local", password });
     expect(res.status).toBe(200);
     expect(res.body.user.id).toBe(String(user._id));
+    expect(res.body.user.orgName).toBe("Default Test Org");
     const me = await auth(request(app).get("/api/auth/me"), res.body.token);
     expect(me.status).toBe(200);
     expect(me.body.user.email).toBe("u1@test.local");
-    expect(await AuditLog.countDocuments({ action: "login", actorId: user._id })).toBe(1);
+    expect(await sys(AuditLog).countDocuments({ action: "login", actorId: user._id })).toBe(1);
   });
 
   test("wrong password and unknown email give the same 401, both audited as anonymous", async () => {
@@ -156,19 +167,21 @@ describe("login", () => {
     expect(b.status).toBe(401);
     expect(a.body).toEqual(b.body);
 
-    const logs = await AuditLog.find({ action: "login_failed" }).sort({ seq: 1 });
-    expect(logs).toHaveLength(2);
-    expect(logs[0].actorName).toBe("anonymous");
-    expect(logs[0].actorRole).toBe("none");
-    expect(String(logs[0].targetId)).toBe(String(user._id));
-    expect(logs[1].targetId).toBeUndefined();
-    expect(logs[1].details).toContain("ghost@test.local");
-    expect(logs[1].details).not.toMatch(/[\u0000-\u001f]/);
+    const rows = await logs({ action: "login_failed" });
+    expect(rows).toHaveLength(2);
+    expect(rows[0].actorName).toBe("anonymous");
+    expect(rows[0].actorRole).toBe("none");
+    expect(String(rows[0].targetId)).toBe(String(user._id));
+    expect(String(rows[0].orgId)).toBe(String(user.orgId));
+    expect(rows[1].targetId).toBeUndefined();
+    expect(rows[1].orgId == null).toBe(true);
+    expect(rows[1].details).toContain("ghost@test.local");
+    expect(rows[1].details).not.toMatch(/[\u0000-\u001f]/);
   });
 
   test("long attempted email is truncated in the audit details", async () => {
     await request(app).post("/api/auth/login").send({ email: "x".repeat(200), password: "wrong-password" });
-    const log = await AuditLog.findOne({ action: "login_failed" });
+    const log = await sys(AuditLog).findOne({ action: "login_failed" });
     expect(log.details.length).toBeLessThan(160);
   });
 
@@ -189,11 +202,11 @@ describe("login", () => {
     expect(res.status).toBe(400);
   });
 
-  test("deactivated user: correct password => 403; wrong password => 401 (no leak)", async () => {
+  test("deactivated user: correct password => 403 + code; wrong password => 401 (no leak)", async () => {
     const { password } = await makeUser("ml_engineer", { email: "off@test.local", extra: { isActive: false } });
     let res = await request(app).post("/api/auth/login").send({ email: "off@test.local", password });
     expect(res.status).toBe(403);
-    expect(res.body).toEqual({ error: "Account is deactivated" });
+    expect(res.body).toEqual({ error: "Account is deactivated", code: "ACCOUNT_DEACTIVATED" });
     res = await request(app).post("/api/auth/login").send({ email: "off@test.local", password: "wrong-password" });
     expect(res.status).toBe(401);
     expect(res.body.error).toBe("Invalid email or password");
@@ -202,13 +215,25 @@ describe("login", () => {
   test("authGuard: deactivated => 401 'Account is deactivated'; deleted user => 401", async () => {
     const { user, token } = await makeUser("ml_engineer");
     expect((await auth(request(app).get("/api/auth/me"), token)).status).toBe(200);
-    await User.updateOne({ _id: user._id }, { isActive: false });
+    await sys(User).updateOne({ _id: user._id }, { isActive: false });
     let res = await auth(request(app).get("/api/auth/me"), token);
     expect(res.status).toBe(401);
     expect(res.body.error).toBe("Account is deactivated");
-    await User.deleteOne({ _id: user._id });
+    await sys(User).deleteOne({ _id: user._id });
     res = await auth(request(app).get("/api/auth/me"), token);
     expect(res.status).toBe(401);
+  });
+
+  test("authGuard: a token of an account that is not (or no longer) active, or of a suspended organization, is refused", async () => {
+    const { user, token } = await makeUser("ml_engineer");
+    await sys(User).updateOne({ _id: user._id }, { status: "pending" });
+    expect((await auth(request(app).get("/api/auth/me"), token)).status).toBe(401);
+    await sys(User).updateOne({ _id: user._id }, { status: "active" });
+    expect((await auth(request(app).get("/api/auth/me"), token)).status).toBe(200);
+    await Organization.updateOne({ _id: user.orgId }, { status: "suspended" });
+    const res = await auth(request(app).get("/api/auth/me"), token);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe("Organization is suspended");
   });
 
   test("garbage / missing tokens => 401", async () => {
@@ -221,6 +246,18 @@ describe("login", () => {
     const spy = jest.spyOn(bcrypt, "compare");
     await request(app).post("/api/auth/login").send({ email: "nobody@test.local", password: "wrong-password" });
     expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  test("a known user with a blocked status also runs exactly one bcrypt compare, before any status answer", async () => {
+    const bcrypt = require("bcryptjs");
+    const { password } = await makeUser("ml_engineer", { email: "wait@test.local", status: "pending" });
+    const spy = jest.spyOn(bcrypt, "compare");
+    const wrong = await request(app).post("/api/auth/login").send({ email: "wait@test.local", password: "wrong-password" });
+    expect(wrong.status).toBe(401); // status is only revealed to somebody who knows the password
+    const right = await request(app).post("/api/auth/login").send({ email: "wait@test.local", password });
+    expect(right.status).toBe(403);
+    expect(spy).toHaveBeenCalledTimes(2);
     spy.mockRestore();
   });
 });
@@ -259,6 +296,15 @@ describe("rate limiting", () => {
     expect(r.status).toBe(429);
     expect(r.body.error).toMatch(/Too many signup attempts/);
   });
+
+  test("the real signup route is limited per IP (SIGNUP_MAX_PER_HOUR)", async () => {
+    expect(env.signupMaxPerHour).toBe(20);
+    let last;
+    for (let i = 0; i < 21; i += 1) last = await signup(valid({ email: `bulk${i}@test.local` }));
+    expect(last.status).toBe(429);
+    expect(last.body.error).toMatch(/Too many signup attempts/);
+    expect(await sys(User).countDocuments()).toBe(20);
+  });
 });
 
 describe("public config", () => {
@@ -271,9 +317,9 @@ describe("public config", () => {
       enableDriftSimulation: expect.any(Boolean),
       storageMode: "local",
       minPasswordLength: 8,
-      signupRolesRequiringCode: ["admin", "compliance_officer"],
+      signupEnabled: true,
     });
-    expect(JSON.stringify(res.body)).not.toContain(env.adminInviteCode);
+    expect(JSON.stringify(res.body)).not.toContain(org.codes.ml_engineer.value);
     expect(mongoose.connection.name).toMatch(/jest/);
   });
 });

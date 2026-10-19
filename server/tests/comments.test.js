@@ -3,9 +3,9 @@ const app = require("../app");
 const Model = require("../models/Model");
 const Version = require("../models/Version");
 const Comment = require("../models/Comment");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, defaultOrg, sys, auth } = require("./helpers");
 
-let eng, comp, admin, version;
+let eng, comp, admin, version, org;
 
 beforeAll(async () => {
   await connect();
@@ -13,8 +13,9 @@ beforeAll(async () => {
   eng = await makeUser("ml_engineer");
   comp = await makeUser("compliance_officer");
   admin = await makeUser("admin");
-  const model = await Model.create({ name: "Comment model", createdBy: eng.user._id });
-  version = await Version.create({ modelId: model._id, versionNumber: 1, fileType: "csv", createdBy: eng.user._id });
+  org = await defaultOrg();
+  const model = await Model.create({ orgId: org._id, name: "Comment model", createdBy: eng.user._id });
+  version = await Version.create({ orgId: org._id, modelId: model._id, versionNumber: 1, fileType: "csv", createdBy: eng.user._id });
 });
 afterAll(disconnect);
 
@@ -56,21 +57,21 @@ describe("comments", () => {
   });
 
   test("archived version -> 404", async () => {
-    const model = await Model.create({ name: "Archived holder", createdBy: eng.user._id });
-    const v = await Version.create({ modelId: model._id, versionNumber: 1, fileType: "csv", createdBy: eng.user._id });
+    const model = await Model.create({ orgId: org._id, name: "Archived holder", createdBy: eng.user._id });
+    const v = await Version.create({ orgId: org._id, modelId: model._id, versionNumber: 1, fileType: "csv", createdBy: eng.user._id });
     await v.softDelete({ by: admin.user._id });
     expect((await auth(request(app).get(url(v._id)), eng.token)).status).toBe(404);
     expect((await auth(request(app).post(url(v._id)), eng.token).send({ body: "x" })).status).toBe(404);
   });
 
   test("comments are immutable", async () => {
-    const c = await Comment.findOne({ versionId: version._id });
-    await expect(Comment.updateOne({ _id: c._id }, { body: "edited" })).rejects.toThrow(/immutable/);
-    await expect(Comment.deleteOne({ _id: c._id })).rejects.toThrow(/immutable/);
-    await expect(Comment.deleteMany({})).rejects.toThrow(/immutable/);
+    const c = await sys(Comment).findOne({ versionId: version._id });
+    await expect(sys(Comment).updateOne({ _id: c._id }, { body: "edited" })).rejects.toThrow(/immutable/);
+    await expect(sys(Comment).deleteOne({ _id: c._id })).rejects.toThrow(/immutable/);
+    await expect(sys(Comment).deleteMany({})).rejects.toThrow(/immutable/);
     c.body = "edited";
     await expect(c.save()).rejects.toThrow(/immutable/);
     await expect(c.deleteOne()).rejects.toThrow(/immutable/);
-    expect(await Comment.countDocuments({ versionId: version._id, body: "edited" })).toBe(0);
+    expect(await sys(Comment).countDocuments({ versionId: version._id, body: "edited" })).toBe(0);
   });
 });

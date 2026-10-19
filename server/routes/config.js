@@ -11,7 +11,7 @@ router.get("/", (req, res) => {
     enableDriftSimulation: env.enableDriftSimulation,
     storageMode: env.storageMode,
     minPasswordLength: env.minPasswordLength,
-    signupRolesRequiringCode: ["admin", "compliance_officer"],
+    signupEnabled: env.signupEnabled,
   });
 });
 

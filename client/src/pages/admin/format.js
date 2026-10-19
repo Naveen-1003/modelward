@@ -6,5 +6,6 @@ export function formatDate(iso) {
 }
 
 export function roleLabel(role) {
+  if (role === "super_admin") return "Platform admin";
   return String(role || "").replace(/_/g, " ");
 }

@@ -3,6 +3,8 @@ const env = require("../config/env");
 // Use in every route's catch block. Logs the real error server-side and returns
 // a generic message to the client; the raw error text is only exposed outside production.
 function serverError(res, err, publicMessage = "Something went wrong") {
+  // No organization selected / resolvable: the client's fix is to pick one, not a server fault.
+  if (err && err.name === "TenantContextError") return res.status(400).json({ error: err.message, code: err.code || "ORG_REQUIRED" });
   console.error(`[error] ${publicMessage}:`, err);
   const body = { error: publicMessage };
   if (!env.isProd && err && err.message) body.details = err.message;

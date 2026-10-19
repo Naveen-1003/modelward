@@ -10,9 +10,17 @@ const { parse, z, str, requiredStr } = require("../middleware/validate");
 const { serverError } = require("../utils/httpErrors");
 const { summarizeModels, emptySummary } = require("../utils/modelSummary");
 const { paginationFields, pageWindow, envelope, escapeRegex } = require("../utils/query");
+const { logCrossOrg } = require("../utils/crossOrg");
 
 const router = express.Router();
 router.param("id", validId);
+
+// Miss on an id lookup: 404 exactly as always. If the id belongs to ANOTHER organization,
+// logCrossOrg also records a cross_org_attempt (it never changes the response).
+async function modelNotFound(req, res) {
+  await logCrossOrg(req, "Model", req.params.id);
+  return res.status(404).json({ error: "Model not found" });
+}
 
 const NAME_COLLATION = { locale: "en", strength: 2 }; // case-insensitive, matches the unique index
 
@@ -111,7 +119,7 @@ router.get("/", authGuard, async (req, res) => {
 router.get("/:id", authGuard, async (req, res) => {
   try {
     const model = await Model.findById(req.params.id);
-    if (!model) return res.status(404).json({ error: "Model not found" });
+    if (!model) return modelNotFound(req, res);
     const summaries = await summarizeModels([model._id]);
     res.json({ model: present(model, summaries.get(String(model._id))) });
   } catch (err) {
@@ -130,7 +138,7 @@ router.delete("/:id", authGuard, roleGuard(["admin"]), async (req, res) => {
     const reason = data.reason || "";
 
     const model = await Model.findById(req.params.id);
-    if (!model) return res.status(404).json({ error: "Model not found" });
+    if (!model) return modelNotFound(req, res);
     const LIVE_MSG = "This model has a live version -- retire it before archiving the model";
     if (await hasLiveVersion(model._id)) return res.status(409).json({ error: LIVE_MSG });
 
@@ -180,7 +188,7 @@ router.delete("/:id", authGuard, roleGuard(["admin"]), async (req, res) => {
 router.post("/:id/restore", authGuard, roleGuard(["admin"]), async (req, res) => {
   try {
     const model = await Model.findById(req.params.id).setOptions({ includeDeleted: true });
-    if (!model) return res.status(404).json({ error: "Model not found" });
+    if (!model) return modelNotFound(req, res);
     if (!model.isDeleted) return res.status(409).json({ error: "Model is not archived" });
 
     const clash = `Cannot restore: an active model named "${model.name}" already exists`;

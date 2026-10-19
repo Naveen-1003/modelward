@@ -1,6 +1,7 @@
 const net = require("net");
 const { rateLimit, MemoryStore } = require("express-rate-limit");
 const env = require("../config/env");
+const { normalizeEmail } = require("../utils/identity");
 
 // Every limiter is built by a factory with its own MemoryStore so tests can build
 // fresh ones (or call resetAll()). Single-instance deployment => in-memory is fine.
@@ -98,7 +99,9 @@ const createAccountLoginLimiter = (opts = {}) =>
     skipSuccessfulRequests: true,
     keyGenerator: (req) => {
       const e = emailKey(req.body && req.body.email);
-      return e ? `acct:${e}` : `noacct:${byIp(req)}`; // malformed bodies fall back to the IP bucket
+      // Normalized exactly like the login lookup (emailKey: "+tag" stripped), otherwise
+      // victim+1@x, victim+2@x ... would each get a fresh budget against ONE account.
+      return e ? `acct:${normalizeEmail(e)}` : `noacct:${byIp(req)}`; // malformed bodies fall back to the IP bucket
     },
   });
 
@@ -111,6 +114,40 @@ const createSignupLimiter = (opts = {}) =>
 const createApiLimiter = (opts = {}) =>
   makeLimiter({ windowMs: 60 * 1000, limit: opts.maxPerMinute ?? env.apiMaxPerMinute, label: "requests" });
 
+// Join-code guessing: only FAILED requests (status >= 400) count, per IP, so a legitimate
+// signup never uses up the budget but brute-forcing a code is capped.
+const createJoinCodeLimiter = (opts = {}) =>
+  makeLimiter({
+    windowMs: (opts.windowMinutes ?? env.joinCodeWindowMinutes) * 60 * 1000,
+    limit: opts.maxFailures ?? env.joinCodeMaxFailures,
+    label: "attempts with an invalid code",
+    skipSuccessfulRequests: true,
+  });
+
+// "Send me a new verification link": per IP and per (normalized) email, every request counts
+// (the endpoint always answers 200, so it cannot be used to mail-bomb one address).
+const createResendVerifyLimiter = (opts = {}) => {
+  const windowMs = 60 * 60 * 1000;
+  const limit = opts.maxPerHour ?? env.resendVerifyMax;
+  const label = "verification email requests";
+  return [
+    makeLimiter({ windowMs, limit, label }),
+    makeLimiter({
+      windowMs,
+      limit,
+      label,
+      keyGenerator: (req) => {
+        const e = emailKey(req.body && req.body.email);
+        return e ? `resend:${normalizeEmail(e)}` : `noresend:${byIp(req)}`;
+      },
+    }),
+  ];
+};
+
+// verify-email / setup-password / setup-password-check: guessing one-time link tokens.
+const createTokenLimiter = (opts = {}) =>
+  makeLimiter({ windowMs: 15 * 60 * 1000, limit: opts.max ?? 30, label: "link attempts" });
+
 // Test hook: forget every counter.
 function resetAll() {
   stores.forEach((s) => s.resetAll());
@@ -120,6 +157,12 @@ module.exports = {
   apiLimiter: createApiLimiter(),
   loginLimiter: createLoginLimiter(),
   signupLimiter: createSignupLimiter(),
+  joinCodeLimiter: createJoinCodeLimiter(),
+  resendVerifyLimiter: createResendVerifyLimiter(),
+  tokenLimiter: createTokenLimiter(),
+  createJoinCodeLimiter,
+  createResendVerifyLimiter,
+  createTokenLimiter,
   createLoginLimiter,
   createIpLoginLimiter,
   createAccountLoginLimiter,

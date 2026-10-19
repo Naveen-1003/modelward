@@ -3,11 +3,12 @@ jest.mock("../utils/metricsClient");
 const request = require("supertest");
 const mongoose = require("mongoose");
 const app = require("../app");
-const Model = require("../models/Model");
-const Version = require("../models/Version");
-const AuditLog = require("../models/AuditLog");
 const computeMetrics = require("../utils/metricsClient");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, auth, sys } = require("./helpers");
+// direct DB access in this file is cross-tenant on purpose (sys = bypassTenant)
+const Model = sys(require("../models/Model"));
+const Version = sys(require("../models/Version"));
+const AuditLog = sys(require("../models/AuditLog"));
 const { GOOD, createModel, newVersion, deploy, post, get } = require("./domainHelpers");
 
 let engineer, engineerUser, engineer2, officer, admin, adminUser, model;

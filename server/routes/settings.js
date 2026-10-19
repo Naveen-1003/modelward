@@ -36,7 +36,8 @@ const putSchema = z
 
 router.get("/", authGuard, async (req, res) => {
   try {
-    const doc = await Settings.findOne({ key: "global" }).populate("updatedBy", "name").lean();
+    // The current organization's document (the tenant plugin scopes it; orgId is explicit anyway).
+    const doc = await Settings.findOne({ orgId: req.orgId }).populate("updatedBy", "name").lean();
     const values = await getThresholds();
     res.json({
       settings: {
@@ -58,7 +59,9 @@ router.put("/", authGuard, roleGuard(["admin"]), async (req, res) => {
 
     const before = await getThresholds();
     const doc = await Settings.findOneAndUpdate(
-      { key: "global" },
+      // Empty filter on purpose: the tenant plugin ANDs in the org (and sets it on insert), which is
+      // what an upsert needs. A top-level orgId here would be "matched twice" with the plugin's.
+      {},
       { $set: { ...data, updatedBy: req.user._id } },
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
     );
@@ -81,7 +84,7 @@ router.put("/", authGuard, roleGuard(["admin"]), async (req, res) => {
       },
     });
   } catch (err) {
-    // two admins saving for the very first time at once: unique key collision
+    // two admins of one organization saving for the very first time at once: unique orgId collision
     if (err && err.code === 11000) return res.status(409).json({ error: "Settings were just created by someone else; retry" });
     serverError(res, err, "Failed to save settings");
   }

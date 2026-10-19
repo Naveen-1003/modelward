@@ -24,6 +24,7 @@ function errorHandler(err, req, res, next) {
   // body-parser: malformed JSON / payload too large
   if (err.type === "entity.parse.failed") return res.status(400).json({ error: "Malformed JSON body" });
   if (err.type === "entity.too.large") return res.status(413).json({ error: "Request body too large" });
+  if (err.name === "TenantContextError") return res.status(400).json({ error: err.message, code: err.code || "ORG_REQUIRED" });
   if (err.status && err.status >= 400 && err.status < 500 && err.expose !== false) {
     return res.status(err.status).json({ error: err.message || "Bad request" });
   }

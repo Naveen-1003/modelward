@@ -113,6 +113,27 @@ function parseJwtExpiry() {
 
 const metricsUrlRaw = raw("METRICS_SERVICE_URL");
 
+// Email delivery (utils/email.js). "console" prints / records mails (development, tests);
+// "apps_script" posts them to a Google Apps Script web app that sends them.
+const EMAIL_PROVIDERS = ["console", "apps_script"];
+const emailProviderRaw = raw("EMAIL_PROVIDER").toLowerCase();
+let emailProvider = "console";
+if (emailProviderRaw && EMAIL_PROVIDERS.includes(emailProviderRaw)) emailProvider = emailProviderRaw;
+else if (emailProviderRaw) loadProblems.push(`EMAIL_PROVIDER "${raw("EMAIL_PROVIDER")}" is not one of: ${EMAIL_PROVIDERS.join(", ")}`);
+
+// Base URL used to build links in emails (verification, password setup).
+let appUrl = clientOrigins[0] || "http://localhost:5173";
+if (raw("APP_URL")) {
+  const n = normalizeOrigin(raw("APP_URL").replace(/\/+$/, ""));
+  if (n) appUrl = n;
+  else loadProblems.push(`APP_URL "${raw("APP_URL")}" is not a valid origin (expected e.g. https://app.example.com, no path)`);
+}
+
+const superAdminEmail = raw("SUPER_ADMIN_EMAIL").toLowerCase();
+if (superAdminEmail && !/^[^\s@]+@[^\s@]+$/.test(superAdminEmail)) {
+  loadProblems.push("SUPER_ADMIN_EMAIL is not a valid email address");
+}
+
 const env = {
   isProd,
   nodeEnv,
@@ -153,10 +174,25 @@ const env = {
   maxUploadMb: int("MAX_UPLOAD_MB", 25),
   retentionDays: int("RETENTION_DAYS", 30),
 
-  // Signup gating. A role whose code is unset cannot be self-registered at all.
-  adminInviteCode: process.env.ADMIN_INVITE_CODE || "",
-  complianceInviteCode: process.env.COMPLIANCE_INVITE_CODE || "",
   minPasswordLength: 8,
+
+  // Email (utils/email.js). The secret travels in the request body because Apps Script
+  // cannot read custom headers; it is never logged or returned.
+  emailProvider,
+  appsScriptUrl: raw("APPS_SCRIPT_URL"),
+  appsScriptSecret: raw("APPS_SCRIPT_SECRET"),
+  emailFromName: raw("EMAIL_FROM_NAME") || "ModelWard",
+  appUrl,
+  // Self-signup depends on email verification, so it is off in production unless real
+  // email delivery is configured.
+  signupEnabled: !(isProd && emailProvider === "console"),
+
+  // Platform owner, promoted/seeded at startup (utils/superAdmin.js). Never created by signup.
+  superAdminEmail,
+  superAdminPassword: process.env.SUPER_ADMIN_PASSWORD || "",
+  superAdminName: raw("SUPER_ADMIN_NAME") || "Platform Admin",
+  // Organization that receives pre-existing data when the multi-tenant migration runs.
+  defaultOrgName: raw("DEFAULT_ORG_NAME") || "Default Organization",
 
   // Optional key for the audit-log hash chain (HMAC-SHA256 instead of plain
   // SHA-256). See utils/auditChain.js for what this does and does not protect.
@@ -169,6 +205,9 @@ const env = {
   loginAccountMaxFailures: int("LOGIN_ACCOUNT_MAX_FAILURES", 10), // per (normalized) email
   loginWindowMinutes: int("LOGIN_WINDOW_MINUTES", 15),
   signupMaxPerHour: int("SIGNUP_MAX_PER_HOUR", 20),
+  joinCodeMaxFailures: int("JOIN_CODE_MAX_FAILURES", 10), // invalid join codes per IP
+  joinCodeWindowMinutes: 15,
+  resendVerifyMax: int("RESEND_VERIFY_MAX", 5), // verification re-sends per IP / per email per hour
   apiMaxPerMinute: int("API_MAX_PER_MINUTE", 600),
 };
 
@@ -196,17 +235,29 @@ function validateEnv() {
     }
   }
 
-  for (const [name, code] of [["ADMIN_INVITE_CODE", env.adminInviteCode], ["COMPLIANCE_INVITE_CODE", env.complianceInviteCode]]) {
-    if (!code) continue;
+  if (env.emailProvider === "apps_script") {
+    let urlOk = false;
+    if (env.appsScriptUrl) {
+      try {
+        urlOk = new URL(env.appsScriptUrl).protocol === "https:";
+      } catch {
+        urlOk = false;
+      }
+    }
     if (isProd) {
-      if (code.length < 16) problems.push(`${name} must be at least 16 characters in production`);
-      else if (PLACEHOLDER.test(code)) problems.push(`${name} looks like a placeholder (contains replace/change-me/example/secret); generate a random one`);
-    } else if (code.length < 8) {
-      warnings.push(`${name} is shorter than 8 characters -- fine for local development, never for production`);
+      if (!urlOk) problems.push("APPS_SCRIPT_URL must be an https URL when EMAIL_PROVIDER=apps_script in production");
+      if (!env.appsScriptSecret) problems.push("APPS_SCRIPT_SECRET is required when EMAIL_PROVIDER=apps_script in production");
+    } else if (!urlOk || !env.appsScriptSecret) {
+      warnings.push("EMAIL_PROVIDER=apps_script but APPS_SCRIPT_URL (https) or APPS_SCRIPT_SECRET is missing: emails will fail to send");
     }
   }
 
   if (isProd) {
+    if (!env.superAdminEmail) warnings.push("SUPER_ADMIN_EMAIL is not set: nobody can manage organizations until a platform admin is configured");
+    if (env.emailProvider === "console") warnings.push("EMAIL_PROVIDER=console in production: self-signup is disabled and no email is sent. Set EMAIL_PROVIDER=apps_script (APPS_SCRIPT_URL, APPS_SCRIPT_SECRET)");
+    if (LOCALHOST.test(env.appUrl)) warnings.push("APP_URL points at localhost: links in emails will not work for recipients. Set APP_URL to the public site address");
+    else if (!env.appUrl.startsWith("https://")) warnings.push("APP_URL is not https: the one-time verification and password-setup links in emails carry secrets and would travel in clear text");
+    if (env.trustProxy === false) warnings.push("TRUST_PROXY is not set: behind a reverse proxy (Render: TRUST_PROXY=1) every client appears under the proxy's address, so all users share ONE rate-limit bucket (a few failed logins or join-code attempts would lock everyone out)");
     if (!env.metricsSecret) problems.push("METRICS_SHARED_SECRET is required in production");
     if (LOCALHOST.test(env.mongoUri)) problems.push("MONGO_URI points at localhost in production");
     if (!env.metricsUrlConfigured) problems.push("METRICS_SERVICE_URL is required in production");
@@ -219,8 +270,6 @@ function validateEnv() {
     if (!env.auditHmacKey) warnings.push("AUDIT_HMAC_KEY is not set: the audit hash chain is unkeyed, so someone with database write access can rewrite it consistently. Set a key and record /api/audit-log/verify's head externally");
   }
   if (env.auditHmacKey && env.auditHmacKey.length < 16) warnings.push("AUDIT_HMAC_KEY is shorter than 16 characters");
-  if (!env.adminInviteCode) warnings.push("ADMIN_INVITE_CODE is not set: admin self-signup is disabled (admins can still be created by an existing admin)");
-  if (!env.complianceInviteCode) warnings.push("COMPLIANCE_INVITE_CODE is not set: compliance-officer self-signup is disabled");
 
   if (problems.length) {
     throw new Error("Invalid configuration:\n - " + problems.join("\n - "));

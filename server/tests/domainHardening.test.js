@@ -22,7 +22,13 @@ const computeRiskTier = require("../utils/riskTier");
 const scoreCompliance = require("../utils/compliance");
 const { runCleanupOnce } = require("../jobs/cleanup");
 const { runMigrations, ensureIndexes } = require("../migrations");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, auth, sys } = require("./helpers");
+// direct DB reads/writes below are cross-tenant on purpose (sys = bypassTenant); the plain models
+// stay available for jest.spyOn
+const sModel = sys(Model);
+const sVersion = sys(Version);
+const sMetricSnapshot = sys(MetricSnapshot);
+const sAuditLog = sys(AuditLog);
 const { GOOD, BAD, CSV, createModel, uploadCsv, newVersion, post, get, approve, deploy } = require("./domainHelpers");
 
 let eng, eng2, officer, admin, model;
@@ -35,7 +41,7 @@ const retryableErr = (msg = "Metrics service is unreachable, try again shortly")
 const wipeDomain = async () => {
   for (const c of ["models", "versions", "metricsnapshots"]) await mongoose.connection.collection(c).deleteMany({});
 };
-const rawVersion = (id) => Version.findById(id).setOptions({ includeDeleted: true }).lean();
+const rawVersion = (id) => sVersion.findById(id).setOptions({ includeDeleted: true }).lean();
 
 beforeAll(async () => {
   await connect();
@@ -66,11 +72,11 @@ describe("1. deploy race", () => {
     const next = await newVersion(eng, model._id);
     await approve(eng, officer, next._id);
     for (let round = 0; round < 12; round += 1) {
-      await Version.updateOne({ _id: next._id }, { $set: { status: "approved", deployedAt: null } });
-      await Version.updateOne({ _id: old._id }, { $set: { status: "deployed" } });
+      await sVersion.updateOne({ _id: next._id }, { $set: { status: "approved", deployedAt: null } });
+      await sVersion.updateOne({ _id: old._id }, { $set: { status: "deployed" } });
       const rs = await Promise.all(Array.from({ length: 6 }, (_, k) => post(k % 2 ? officer : admin, `/api/versions/${next._id}/deploy`)));
       expect(rs.filter((r) => r.status === 200)).toHaveLength(1);
-      const live = await Version.find({ modelId: model._id, status: { $in: ["deployed", "needs_review"] } }).lean();
+      const live = await sVersion.find({ modelId: model._id, status: { $in: ["deployed", "needs_review"] } }).lean();
       expect(live.map((v) => String(v._id))).toEqual([next._id]);
     }
   });
@@ -81,10 +87,10 @@ describe("1. deploy race", () => {
     await approve(eng, officer, a._id);
     await approve(eng, officer, b._id);
     for (let round = 0; round < 8; round += 1) {
-      await Version.updateMany({ _id: { $in: [a._id, b._id] } }, { $set: { status: "approved", deployedAt: null } });
+      await sVersion.updateMany({ _id: { $in: [a._id, b._id] } }, { $set: { status: "approved", deployedAt: null } });
       const rs = await Promise.all([post(officer, `/api/versions/${a._id}/deploy`), post(admin, `/api/versions/${b._id}/deploy`)]);
       expect(rs.every((r) => [200, 409].includes(r.status))).toBe(true);
-      const live = await Version.find({ modelId: model._id, status: { $in: ["deployed", "needs_review"] } }).lean();
+      const live = await sVersion.find({ modelId: model._id, status: { $in: ["deployed", "needs_review"] } }).lean();
       expect(live).toHaveLength(1);
       expect(rs.filter((r) => r.status === 200).length).toBeGreaterThanOrEqual(1);
     }
@@ -96,8 +102,8 @@ describe("1. deploy race", () => {
     await approve(eng, officer, next._id);
     expect((await post(officer, `/api/versions/${next._id}/deploy`)).status).toBe(200);
     expect((await post(officer, `/api/versions/${next._id}/deploy`)).status).toBe(400);
-    expect((await Version.findById(old._id)).status).toBe("superseded");
-    expect(await AuditLog.countDocuments({ targetId: old._id, action: "deploy", details: /Superseded by v2/ })).toBe(1);
+    expect((await sVersion.findById(old._id)).status).toBe("superseded");
+    expect(await sAuditLog.countDocuments({ targetId: old._id, action: "deploy", details: /Superseded by v2/ })).toBe(1);
   });
 });
 
@@ -129,7 +135,7 @@ describe("2. resolve-review keep resolves the drift", () => {
     expect(again.body.version.status).toBe("deployed");
     expect((await driftClear()).passed).toBe(true);
     // the original baseline snapshot is untouched
-    const base = await MetricSnapshot.findOne({ versionId: live._id, isBaseline: true });
+    const base = await sMetricSnapshot.findOne({ versionId: live._id, isBaseline: true });
     expect(base.accuracy).toBeCloseTo(GOOD.accuracy, 5);
   });
 
@@ -170,18 +176,18 @@ describe("3. owner-only mutations", () => {
     expect(r1.status).toBe(403);
     expect(r1.body.error).toMatch(/Only the engineer who uploaded this version/);
     expect((await post(eng2, `/api/versions/${v._id}/submit`)).status).toBe(403);
-    expect((await Version.findById(v._id)).status).toBe("draft");
+    expect((await sVersion.findById(v._id)).status).toBe("draft");
     expect((await patch(eng, `/api/versions/${v._id}/notes`, { datasetNotes: "mine" })).status).toBe(200);
     expect((await post(eng, `/api/versions/${v._id}/submit`)).status).toBe(200);
     expect((await post(eng2, `/api/versions/${v._id}/withdraw`)).status).toBe(403);
-    expect((await Version.findById(v._id)).status).toBe("submitted");
+    expect((await sVersion.findById(v._id)).status).toBe("submitted");
     expect((await post(eng, `/api/versions/${v._id}/withdraw`)).status).toBe(200);
 
     computeMetrics.mockRejectedValue(retryableErr());
     const failed = await newVersion(eng, model._id);
     computeMetrics.mockResolvedValue(GOOD);
     expect((await post(eng2, `/api/versions/${failed._id}/retry`)).status).toBe(403);
-    expect((await Version.findById(failed._id)).retryable).toBe(true); // 403 did not claim it
+    expect((await sVersion.findById(failed._id)).retryable).toBe(true); // 403 did not claim it
     expect((await post(eng, `/api/versions/${failed._id}/retry`)).status).toBe(200);
   });
 
@@ -215,15 +221,18 @@ describe("4. null thresholds never override defaults", () => {
 
 // ---------------------------------------------------------------------------
 describe("5. stale legacy name_1 index", () => {
-  test("ensureIndexes drops a plain {name:1} index and recreates the collated partial one", async () => {
+  test("ensureIndexes drops a plain global {name:1} index and builds the collated partial per-organization one", async () => {
     const coll = mongoose.connection.collection("models");
     await coll.dropIndex("name_1").catch(() => {});
     await coll.createIndex({ name: 1 }, { unique: true, name: "name_1" });
     jest.spyOn(console, "log").mockImplementation(() => {});
     jest.spyOn(console, "warn").mockImplementation(() => {});
     await runMigrations();
-    const idx = (await coll.indexes()).filter((i) => i.name === "name_1");
+    const indexes = await coll.indexes();
+    expect(indexes.filter((i) => i.name === "name_1")).toHaveLength(0); // names are no longer unique across organizations
+    const idx = indexes.filter((i) => i.name === "orgId_1_name_1");
     expect(idx).toHaveLength(1);
+    expect(idx[0]).toMatchObject({ unique: true });
     expect(idx[0].collation).toMatchObject({ locale: "en", strength: 2 });
     expect(idx[0].partialFilterExpression).toEqual({ isDeleted: false });
     // an archived name is reusable and case variants are rejected again
@@ -371,17 +380,17 @@ describe("9. retry claim cannot strand a version", () => {
     expect(r.status).toBe(500);
     const row = await rawVersion(failed._id);
     expect(row).toMatchObject({ status: "upload_failed", retryable: true, retryClaimedAt: null });
-    expect(await MetricSnapshot.countDocuments({ versionId: failed._id })).toBe(0);
+    expect(await sMetricSnapshot.countDocuments({ versionId: failed._id })).toBe(0);
     const again = await post(eng, `/api/versions/${failed._id}/retry`);
     expect(again.status).toBe(200);
     expect(again.body.version.status).toBe("draft");
-    expect(await MetricSnapshot.countDocuments({ versionId: failed._id })).toBe(1);
+    expect(await sMetricSnapshot.countDocuments({ versionId: failed._id })).toBe(1);
   });
 
   test("a fresh claim blocks; a claim older than 5 minutes is taken over", async () => {
-    await Version.updateOne({ _id: failed._id }, { $set: { retryable: false, retryClaimedAt: new Date() } });
+    await sVersion.updateOne({ _id: failed._id }, { $set: { retryable: false, retryClaimedAt: new Date() } });
     expect((await post(eng, `/api/versions/${failed._id}/retry`)).status).toBe(400);
-    await Version.updateOne({ _id: failed._id }, { $set: { retryClaimedAt: new Date(Date.now() - 6 * 60 * 1000) } });
+    await sVersion.updateOne({ _id: failed._id }, { $set: { retryClaimedAt: new Date(Date.now() - 6 * 60 * 1000) } });
     const r = await post(eng, `/api/versions/${failed._id}/retry`);
     expect(r.status).toBe(200);
     expect(r.body.version.status).toBe("draft");
@@ -411,7 +420,7 @@ describe("10. queue excludes archived models; archive cascade is resilient", () 
     const ov = await newVersion(eng, other._id);
     await post(eng, `/api/versions/${ov._id}/submit`).expect(200);
     // archive the MODEL only (no cascade) to prove the filter itself works
-    await Model.updateOne({ _id: model._id }, { $set: { isDeleted: true, deletedAt: new Date() } });
+    await sModel.updateOne({ _id: model._id }, { $set: { isDeleted: true, deletedAt: new Date() } });
     const q = await get(officer, "/api/versions?status=submitted&limit=100");
     expect(q.status).toBe(200);
     expect(q.body.versions.every((x) => x.modelId && x.modelId.name)).toBe(true);
@@ -457,21 +466,27 @@ describe("12. migrations", () => {
   test("duplicate-name dedupe follows case + trailing-space semantics, then the unique index builds", async () => {
     jest.spyOn(console, "log").mockImplementation(() => {});
     await wipeDomain();
-    await col("models").dropIndex("name_1").catch(() => {}); // legacy rows would violate it
+    // a database from before the unique index existed: legacy rows would violate it
+    await col("models").dropIndex("name_1").catch(() => {});
+    await col("models").dropIndex("orgId_1_name_1").catch(() => {});
+    const orgX = new mongoose.Types.ObjectId();
+    const orgY = new mongoose.Types.ObjectId();
     await col("models").insertMany([
       { name: "Acme Scorer", createdBy: U, createdAt: new Date(1000) },
       { name: "acme scorer ", createdBy: U, createdAt: new Date(2000) },
       { name: "ACME SCORER", createdBy: U, createdAt: new Date(3000) },
       { name: "Acme Scorer (2)", createdBy: U, createdAt: new Date(4000) },
+      // the same name in two DIFFERENT organizations is not a duplicate
+      { name: "Credit Scorer", createdBy: U, orgId: orgX, createdAt: new Date(5000) },
+      { name: "credit scorer", createdBy: U, orgId: orgY, createdAt: new Date(6000) },
     ]);
     const summary = await runMigrations();
     expect(summary.join(";")).toMatch(/renamed 2 duplicate model name/);
-    const names = (await col("models").find().sort({ createdAt: 1 }).toArray()).map((m) => m.name);
-    expect(names[0]).toBe("Acme Scorer");
-    expect(names[1]).toBe("acme scorer (3)"); // trimmed, "(2)" already taken
-    expect(names[2]).toBe("ACME SCORER (4)");
-    expect(names[3]).toBe("Acme Scorer (2)");
-    const idx = (await col("models").indexes()).find((i) => i.name === "name_1");
+    const rows = await col("models").find().sort({ createdAt: 1 }).toArray();
+    const names = rows.map((m) => m.name);
+    expect(names.slice(0, 4)).toEqual(["Acme Scorer", "acme scorer (3)", "ACME SCORER (4)", "Acme Scorer (2)"]); // 2nd is trimmed, "(2)" already taken
+    expect(names.slice(4)).toEqual(["Credit Scorer", "credit scorer"]);
+    const idx = (await col("models").indexes()).find((i) => i.name === "orgId_1_name_1");
     expect(idx).toMatchObject({ unique: true });
   });
 
@@ -517,16 +532,16 @@ describe("13. stats stay exact with archived models", () => {
 describe("14. no scored version without a baseline snapshot", () => {
   test("a failing baseline insert on upload removes the version row and the files, returns 500", async () => {
     const before = files();
-    const countBefore = await Version.countDocuments({ modelId: model._id }).setOptions({ includeDeleted: true });
+    const countBefore = await sVersion.countDocuments({ modelId: model._id }).setOptions({ includeDeleted: true });
     jest.spyOn(MetricSnapshot, "create").mockRejectedValueOnce(new Error("db down"));
     jest.spyOn(console, "error").mockImplementation(() => {});
     const r = await uploadCsv(eng, model._id);
     expect(r.status).toBe(500);
-    expect(await Version.countDocuments({ modelId: model._id }).setOptions({ includeDeleted: true })).toBe(countBefore);
+    expect(await sVersion.countDocuments({ modelId: model._id }).setOptions({ includeDeleted: true })).toBe(countBefore);
     expect(files()).toBe(before);
     // and the next upload works
     const ok = await uploadCsv(eng, model._id);
     expect(ok.status).toBe(201);
-    expect(await MetricSnapshot.countDocuments({ versionId: ok.body.version._id })).toBe(1);
+    expect(await sMetricSnapshot.countDocuments({ versionId: ok.body.version._id })).toBe(1);
   });
 });

@@ -5,7 +5,8 @@
 # time the Blueprint is applied; they are never stored in this file.
 # Render cannot copy a generated value from one service to another, so
 # METRICS_SHARED_SECRET is generated on modelward-metrics and must be pasted
-# into modelward-api by hand (DEPLOYMENT.md, step 3).
+# into modelward-api by hand (DEPLOYMENT.md, step 3). SUPER_ADMIN_*, the email relay
+# values and APP_URL are also prompted for; see DEPLOYMENT.md steps 5-6.
 services:
   # ---- FastAPI metrics service (scoring). Deploy this FIRST. ----
   - type: web
@@ -67,7 +68,24 @@ services:
         value: discard # Render's disk is ephemeral; files are deleted after scoring
       - key: ENABLE_DRIFT_SIMULATION
         value: "true" # set "false" for a real deployment that only uses monitoring batches
-      - key: ADMIN_INVITE_CODE
-        sync: false # required to self-register an admin; unset = admin signup disabled
-      - key: COMPLIANCE_INVITE_CODE
-        sync: false # required to self-register a compliance officer; unset = disabled
+      # ---- Platform owner (DEPLOYMENT.md, step 6). Never created by signup. ----
+      - key: SUPER_ADMIN_EMAIL
+        sync: false # your email: that account becomes super_admin at startup
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false # only used to create the account (8-72 chars); remove it after the first start
+      - key: SUPER_ADMIN_NAME
+        value: Platform Admin
+      - key: DEFAULT_ORG_NAME
+        value: Default Organization # receives pre-existing (single-organization) data on the first start
+      # ---- Email through the Google Apps Script relay (DEPLOYMENT.md, "Email relay"). ----
+      # With EMAIL_PROVIDER=console, self-signup is disabled in production and no mail is sent.
+      - key: EMAIL_PROVIDER
+        value: apps_script # console | apps_script; apps_script needs the next two values to boot
+      - key: APPS_SCRIPT_URL
+        sync: false # the deployed web-app URL ending in /exec (https); treat as a credential
+      - key: APPS_SCRIPT_SECRET
+        sync: false # random string, also stored in the script as RELAY_SECRET
+      - key: EMAIL_FROM_NAME
+        value: ModelWard
+      - key: APP_URL
+        sync: false # public site origin used in emailed links, e.g. https://modelward.vercel.app (no trailing slash)

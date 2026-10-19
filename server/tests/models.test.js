@@ -3,7 +3,8 @@ jest.mock("../utils/metricsClient");
 const request = require("supertest");
 const app = require("../app");
 const computeMetrics = require("../utils/metricsClient");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, defaultOrg, auth } = require("./helpers");
+const { runWithOrg } = require("../utils/tenant");
 const { GOOD, BAD, createModel, newVersion, deploy, post, get } = require("./domainHelpers");
 
 let engineer, officer, admin;
@@ -173,7 +174,8 @@ describe("summarizeModels", () => {
     const spy = jest.spyOn(Version, "aggregate");
     const m1 = await createModel(engineer);
     const m2 = await createModel(engineer);
-    const out = await summarizeModels([m1._id, m2._id, String(new mongoose.Types.ObjectId()), "garbage"]);
+    const org = await defaultOrg();
+    const out = await runWithOrg(org._id, () => summarizeModels([m1._id, m2._id, String(new mongoose.Types.ObjectId()), "garbage"]));
     expect(spy).toHaveBeenCalledTimes(1);
     expect(out.size).toBe(3);
     expect((await summarizeModels([])).size).toBe(0);

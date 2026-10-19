@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const softDelete = require("../utils/softDelete");
+const { tenantPlugin } = require("../utils/tenant");
 
 const STATUSES = [
   "draft",
@@ -86,6 +87,8 @@ const versionSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 versionSchema.plugin(softDelete);
+// orgId is denormalised from the parent model (taken from the request context on create).
+versionSchema.plugin(tenantPlugin);
 
 versionSchema.index({ modelId: 1, versionNumber: 1 }, { unique: true });
 versionSchema.index({ status: 1, createdAt: -1 });

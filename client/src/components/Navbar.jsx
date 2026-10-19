@@ -7,12 +7,17 @@ const NAV = {
   ml_engineer: { to: "/ml", label: "My Models", icon: "registry" },
   compliance_officer: { to: "/compliance", label: "Review Queue", icon: "queue" },
   admin: { to: "/admin", label: "Overview", icon: "overview" },
+  super_admin: { to: "/admin", label: "Platform", icon: "overview" },
 };
 
+const ROLE_LABEL = { super_admin: "Platform admin" };
+
 export default function Navbar() {
-  const { user, logout } = useAuth();
+  const { user, logout, activeOrg } = useAuth();
   const navigate = useNavigate();
   const item = NAV[user?.role];
+  // A super admin works inside one selected organization at a time; everyone else has their own.
+  const orgLabel = user.role === "super_admin" ? (activeOrg ? activeOrg.name : "No organization selected") : user.orgName;
 
   function handleLogout() {
     logout();
@@ -36,7 +41,8 @@ export default function Navbar() {
       <div className="sidebar-user">
         <div className="who">
           <strong>{user.name}</strong>
-          <span>{user.role.replace(/_/g, " ")}</span>
+          <span>{ROLE_LABEL[user.role] || user.role.replace(/_/g, " ")}</span>
+          {orgLabel && <span className="who-org" title={orgLabel}>{orgLabel}</span>}
         </div>
         <button className="icon-btn" onClick={handleLogout} aria-label="Log out" title="Log out">
           <Icon name="logout" />

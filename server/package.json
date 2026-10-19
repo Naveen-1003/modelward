@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "seed:superadmin": "node scripts/seedSuperAdmin.js",
     "test": "cross-env NODE_ENV=test jest --runInBand --forceExit"
   },
   "dependencies": {

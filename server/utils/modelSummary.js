@@ -6,13 +6,18 @@ const { LIVE_STATUSES } = Version;
 // Pipeline stages that keep only versions whose model is NOT archived (a $lookup against the
 // models collection), for aggregations over "everything" where an id list would be huge.
 // Adds `model` = [{ name }] to each surviving version.
+// Only the root collection of an aggregation is tenant-filtered (the plugin cannot see inside a
+// $lookup), so the join also requires the model to carry the SAME orgId as the version it joins.
 const ACTIVE_MODEL_STAGES = [
   {
     $lookup: {
       from: Model.collection.name,
-      localField: "modelId",
-      foreignField: "_id",
-      pipeline: [{ $match: { isDeleted: { $ne: true } } }, { $project: { name: 1 } }],
+      let: { modelId: "$modelId", orgId: "$orgId" },
+      pipeline: [
+        { $match: { $expr: { $and: [{ $eq: ["$_id", "$$modelId"] }, { $eq: ["$orgId", "$$orgId"] }] } } },
+        { $match: { isDeleted: { $ne: true } } },
+        { $project: { name: 1 } },
+      ],
       as: "model",
     },
   },

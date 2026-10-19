@@ -25,6 +25,8 @@ const envelope = (items, key, { page, limit }, total) => ({
   pages: Math.max(1, Math.ceil(total / limit)),
 });
 
-const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// A NUL byte makes MongoDB reject the pattern ("Regular expression cannot contain an embedded null
+// byte") and the search would answer 500 instead of "no match"; it can never match a name, so drop it.
+const escapeRegex = (s) => String(s).replace(/\0/g, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 module.exports = { paginationFields, pageWindow, envelope, escapeRegex, MAX_LIMIT };

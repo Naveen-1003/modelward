@@ -12,6 +12,7 @@ import MonitoringPanel from "./MonitoringPanel.jsx";
 import DownloadButton from "./DownloadButton.jsx";
 import { Icon, Loading, ErrorBox } from "./ui.jsx";
 import { LIVE_STATUSES, MAX_COMMENT, MAX_NOTES, fmt, fmtDateTime, useMounted } from "./featureUtils.js";
+import { isAdminRole } from "../roleHome.js";
 
 const STEPS = [
   { key: "draft", label: "Draft" },
@@ -150,7 +151,7 @@ export default function VersionDetail({ versionId, onChanged, onClone }) {
   const role = user?.role;
   const isML = role === "ml_engineer";
   const isCompliance = role === "compliance_officer";
-  const isAdmin = role === "admin";
+  const isAdmin = isAdminRole(role); // super_admin: admin powers, never a reviewer
   const canDecide = isCompliance || isAdmin; // deploy / retire / resolve review
   const isOwner = !!user && version.createdBy === user.id;
   const status = version.status;

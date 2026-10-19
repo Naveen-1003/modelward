@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { tenantPlugin } = require("../utils/tenant");
 
 // Discussion thread on a version. Append-only like the audit log: a comment can
 // be added but never edited or removed (the review trail must stay trustworthy).
@@ -23,5 +24,8 @@ commentSchema.pre("save", function noUpdates(next) {
 });
 commentSchema.pre("deleteOne", { document: true, query: false }, blocked);
 commentSchema.pre("updateOne", { document: true, query: false }, blocked);
+
+// Applied after the immutability hooks so their error wins over a missing-context error.
+commentSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("Comment", commentSchema);

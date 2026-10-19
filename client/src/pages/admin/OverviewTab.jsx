@@ -8,11 +8,12 @@ import { formatDate, roleLabel } from "./format.js";
 
 const TIERS = ["low", "medium", "high", "unrated"];
 
-function Tile({ label, value }) {
+function Tile({ label, value, children }) {
   return (
     <div>
       <dt>{label}</dt>
       <dd className="mono">{value ?? 0}</dd>
+      {children}
     </div>
   );
 }
@@ -57,7 +58,8 @@ function ItemList({ items, empty }) {
   );
 }
 
-export default function OverviewTab() {
+// `onOpenPending` (optional) switches the dashboard to the Pending tab.
+export default function OverviewTab({ onOpenPending }) {
   const [stats, setStats] = useState(null);
   const [error, setError] = useState("");
 
@@ -133,6 +135,11 @@ export default function OverviewTab() {
           <dl className="metrics">
             <Tile label="Total" value={users.total} />
             <Tile label="Active" value={users.active} />
+            <Tile label="Pending approval" value={users.pending}>
+              {users.pending > 0 && typeof onOpenPending === "function" && (
+                <button type="button" className="link-btn small" onClick={onOpenPending}>Review sign-ups</button>
+              )}
+            </Tile>
             {Object.entries(users.byRole || {}).map(([role, n]) => (
               <Tile key={role} label={roleLabel(role)} value={n} />
             ))}

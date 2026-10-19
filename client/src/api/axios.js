@@ -13,18 +13,45 @@ const TOKEN_KEY = "modelward_token";
 const FLASH_KEY = "modelward_flash";
 const SESSION_EXPIRED = "Your session expired — please sign in again.";
 
+// The guard answers 401 for a suspended organization or a deactivated account; say so instead of
+// the generic "session expired" (the server wording is matched loosely, anything else falls back).
+function signOutNotice(err) {
+  const msg = String(err?.response?.data?.error || "");
+  if (/suspended/i.test(msg)) return "Your organization is suspended. Contact the platform administrator.";
+  if (/deactivated/i.test(msg)) return "Your account has been deactivated. Contact your organization admin.";
+  return SESSION_EXPIRED;
+}
+
 const api = axios.create({ baseURL: API_BASE });
+
+// The organization a super admin is currently working in. The interceptor cannot read React
+// state, so AuthContext pushes the value here (and clears it on logout / user change). It stays
+// null for every non-super-admin, so no other user can ever send an X-Org-Id header.
+let orgHeaderId = null;
+export function setOrgHeader(id) {
+  orgHeaderId = typeof id === "string" && id ? id : null;
+}
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (token && orgHeaderId) config.headers["X-Org-Id"] = orgHeaderId;
   return config;
 });
 
-// Credentials being wrong on these two is a normal 401, not an expired session.
+// Credentials or one-time links being wrong on these is a normal 4xx, not an expired session.
+const AUTH_ATTEMPT_PATHS = [
+  "/auth/login",
+  "/auth/signup",
+  "/auth/verify-email",
+  "/auth/verify-email/check",
+  "/auth/setup-password",
+  "/auth/setup-password/check",
+  "/auth/resend-verification",
+];
 function isAuthAttempt(url = "") {
   const path = String(url).split("?")[0];
-  return path === "/auth/login" || path === "/auth/signup";
+  return AUTH_ATTEMPT_PATHS.includes(path);
 }
 
 api.interceptors.response.use(
@@ -36,12 +63,17 @@ api.interceptors.response.use(
       if (localStorage.getItem(TOKEN_KEY)) {
         localStorage.removeItem(TOKEN_KEY);
         try {
-          sessionStorage.setItem(FLASH_KEY, SESSION_EXPIRED);
+          sessionStorage.setItem(FLASH_KEY, signOutNotice(err));
         } catch {
           /* storage blocked: the redirect still happens, just without the notice */
         }
         window.dispatchEvent(new Event("modelward:unauthorized"));
       }
+    }
+    // A super admin without a (valid) organization selected: not a session problem. The
+    // AuthContext clears the stale selection; the page decides what to show.
+    if (err?.response?.status === 400 && err.response.data?.code === "ORG_REQUIRED") {
+      window.dispatchEvent(new Event("modelward:org-required"));
     }
     return Promise.reject(err);
   }

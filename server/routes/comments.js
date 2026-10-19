@@ -8,6 +8,7 @@ const writeAuditLog = audit.writeAuditLog || audit;
 const validId = require("../middleware/validId");
 const { parse, requiredStr, z } = require("../middleware/validate");
 const { serverError } = require("../utils/httpErrors");
+const { logCrossOrg } = require("../utils/crossOrg");
 
 const router = express.Router();
 router.param("id", validId);
@@ -23,13 +24,16 @@ const toJson = (c) => ({
 });
 
 // Archived versions are invisible (soft-delete plugin), so they 404 here too.
-async function findVersion(id) {
-  return Version.findById(id).select("_id modelId versionNumber").lean();
+// A miss is a 404; when the id belongs to another organization it is also audited (cross_org_attempt).
+async function findVersion(req) {
+  const version = await Version.findById(req.params.id).select("_id modelId versionNumber").lean();
+  if (!version) await logCrossOrg(req, "Version", req.params.id);
+  return version;
 }
 
 router.get("/versions/:id/comments", authGuard, async (req, res) => {
   try {
-    if (!(await findVersion(req.params.id))) return res.status(404).json({ error: "Version not found" });
+    if (!(await findVersion(req))) return res.status(404).json({ error: "Version not found" });
     const comments = await Comment.find({ versionId: req.params.id }).sort({ createdAt: 1, _id: 1 }).limit(1000).lean();
     res.json({ comments: comments.map(toJson) });
   } catch (err) {
@@ -41,7 +45,7 @@ router.post("/versions/:id/comments", authGuard, async (req, res) => {
   try {
     const data = parse(commentSchema, req.body, res);
     if (!data) return;
-    const version = await findVersion(req.params.id);
+    const version = await findVersion(req);
     if (!version) return res.status(404).json({ error: "Version not found" });
 
     const comment = await Comment.create({

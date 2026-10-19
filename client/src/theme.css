@@ -323,7 +323,7 @@ legend { padding: 0; margin-bottom: 0.45rem; font-size: 0.85rem; font-weight: 50
 /* =============================================================================
    Tables
    ========================================================================== */
-.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 /* long logs scroll inside the card instead of stretching the page */
 .table-wrap.scroll { max-height: 520px; overflow: auto; }
 .table-wrap.scroll th { position: sticky; top: 0; z-index: 1; }
@@ -410,7 +410,7 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
   .queue-item { flex: 0 0 220px; }
 }
 @media (max-width: 760px) {
-  .app-shell.has-sidebar { grid-template-columns: 1fr; }
+  .app-shell.has-sidebar { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 0.5rem 1rem; padding: 0.6rem 1rem; border-right: 0; border-bottom: 1px solid var(--line); }
   .sidebar nav { flex: 1 1 auto; flex-direction: row; order: 3; width: 100%; }
   .sidebar-user { margin-left: auto; padding: 0; border: 0; }
@@ -452,3 +452,18 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* =============================================================================
+   Multi-organization: sidebar org line, join / verify / setup pages
+   ========================================================================== */
+.who .who-org { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; color: var(--ink-2); }
+.auth-card .auth-lead { margin-top: 0.4rem; }
+.auth-identity { margin-top: 1.25rem; padding: 0.75rem 0.9rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.3rem 0.9rem; font-size: 0.88rem; }
+.auth-identity dt { color: var(--ink-3); }
+.auth-identity dd { margin: 0; overflow-wrap: anywhere; font-weight: 500; }
+.auth-card .auth-actions { margin-top: 1.25rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.auth-card .auth-actions button { width: 100%; }
+.auth-card .notice, .auth-card .error-box { overflow-wrap: anywhere; }
+.auth-card .dev-link { margin-top: 1rem; }
+.auth-card .dev-link strong { display: block; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.auth-card h1:focus { outline: none; }

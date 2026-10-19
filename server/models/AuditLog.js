@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const ACTIONS = require("../utils/auditActions");
+const { tenantPlugin } = require("../utils/tenant");
 
 // Append-only, hash-chained log. Entries written before the chain existed have no
 // seq/hash ("legacy, unchained") and are never modified.
@@ -15,6 +16,9 @@ const auditLogSchema = new mongoose.Schema({
   targetType: { type: String, required: true },
   targetId: { type: mongoose.Schema.Types.ObjectId }, // optional (e.g. failed login for unknown email)
   details: { type: String, default: "", maxlength: 2000 },
+  // orgId (added by the tenant plugin, optional): the organization the event belongs to; null/absent =
+  // platform level or legacy. Part of the hash only when chainV === 2 (see utils/auditChain.js).
+  chainV: { type: Number }, // 2 = hash covers orgId; absent = legacy layout
   createdAt: { type: Date, required: true, default: Date.now }, // set explicitly before hashing
 });
 
@@ -37,6 +41,11 @@ auditLogSchema.pre("save", function blockResave() {
 });
 auditLogSchema.pre("bulkWrite", immutable);
 auditLogSchema.pre("remove", immutable); // legacy document middleware name; harmless on Mongoose 8
+
+// Applied LAST so the immutability hooks above run first and keep their own error. Audit rows are
+// only ever created and read; the plugin contributes the orgId field, the orgId read filter and
+// the create rules.
+auditLogSchema.plugin(tenantPlugin, { optionalOrg: true });
 
 module.exports = mongoose.model("AuditLog", auditLogSchema);
 module.exports.ACTIONS = ACTIONS;

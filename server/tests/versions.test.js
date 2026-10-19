@@ -4,15 +4,16 @@ const fs = require("fs");
 const request = require("supertest");
 const app = require("../app");
 const env = require("../config/env");
-const Version = require("../models/Version");
-const MetricSnapshot = require("../models/MetricSnapshot");
-const AuditLog = require("../models/AuditLog");
 const computeMetrics = require("../utils/metricsClient");
 const { UPLOAD_DIR } = require("../middleware/upload");
 const { evaluateSnapshot } = require("../utils/drift");
 const { tierRank, worseThan } = require("../utils/riskTier");
 const scoreCompliance = require("../utils/compliance");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, auth, sys } = require("./helpers");
+// direct DB access in this file is cross-tenant on purpose (sys = bypassTenant)
+const Version = sys(require("../models/Version"));
+const MetricSnapshot = sys(require("../models/MetricSnapshot"));
+const AuditLog = sys(require("../models/AuditLog"));
 const { metrics, GOOD, MEDIUM, BAD, CSV, createModel, uploadCsv, newVersion, post, get, approve, deploy } = require("./domainHelpers");
 
 let engineer, engineerUser, engineer2, officer, admin, model;
@@ -670,7 +671,7 @@ describe("drift monitoring", () => {
     env.enableDriftSimulation = true;
     const base = await MetricSnapshot.findOne({ versionId: live._id });
     await MetricSnapshot.insertMany(
-      Array.from({ length: 499 }, () => ({ versionId: live._id, accuracy: 0.9, fairnessGap: 0.02, source: "simulated", riskTier: "low" }))
+      Array.from({ length: 499 }, () => ({ orgId: base.orgId, versionId: live._id, accuracy: 0.9, fairnessGap: 0.02, source: "simulated", riskTier: "low" }))
     );
     expect(base).toBeTruthy();
     const res = await sim();

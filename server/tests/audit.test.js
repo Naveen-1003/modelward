@@ -1,6 +1,6 @@
 const request = require("supertest");
 const mongoose = require("mongoose");
-const { connect, reset, disconnect, makeUser, auth } = require("./helpers");
+const { connect, reset, disconnect, makeUser, makeOrg, sys, auth } = require("./helpers");
 
 let app, AuditLog, User, writeAuditLog, rateLimit;
 const raw = () => mongoose.connection.collection("auditlogs");
@@ -31,7 +31,7 @@ describe("writeAuditLog + hash chain", () => {
     await entry(user);
     await entry(user);
     await entry(user);
-    const logs = await AuditLog.find().sort({ seq: 1 });
+    const logs = await sys(AuditLog).find().sort({ seq: 1 });
     expect(logs.map((l) => l.seq)).toEqual([1, 2, 3]);
     expect(logs[0].prevHash).toBe("GENESIS");
     expect(logs[1].prevHash).toBe(logs[0].hash);
@@ -39,30 +39,31 @@ describe("writeAuditLog + hash chain", () => {
     expect(logs[0].hash).toMatch(/^[a-f0-9]{64}$/);
     expect(logs[0].actorId.toString()).toBe(String(user._id));
 
-    const { token } = await makeUser("admin");
+    const { token } = await makeUser("super_admin"); // the full output (head, totals) is the super admin's
     const res = await auth(request(app).get("/api/audit-log/verify"), token);
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true, checked: 3, legacyUnchained: 0, keyed: false });
     expect(res.body.brokenSeqs).toBeUndefined();
     expect(res.body.head.seq).toBe(3);
-    expect(res.body.head.hash).toBe((await AuditLog.findOne({ seq: 3 }).lean()).hash);
+    expect(res.body.head.hash).toBe((await sys(AuditLog).findOne({ seq: 3 }).lean()).hash);
   });
 
   test("concurrent writers still produce a gap-free valid chain", async () => {
     const { user } = await makeUser("admin");
     await Promise.all(Array.from({ length: 15 }, (_, i) => entry(user, { details: `n${i}` })));
-    const seqs = (await AuditLog.find().sort({ seq: 1 })).map((l) => l.seq);
+    const seqs = (await sys(AuditLog).find().sort({ seq: 1 })).map((l) => l.seq);
     expect(seqs).toEqual(Array.from({ length: 15 }, (_, i) => i + 1));
   });
 
   test("writers racing on the same seq (bypassing the in-process queue) retry on duplicate key", async () => {
     const { user } = await makeUser("admin");
-    const fields = (i) => ({ actorName: user.name, actorRole: "admin", actorId: user._id, action: "login", targetType: "User", targetId: user._id, details: `r${i}` });
+    const fields = (i) => ({ orgId: user.orgId, actorName: user.name, actorRole: "admin", actorId: user._id, action: "login", targetType: "User", targetId: user._id, details: `r${i}` });
     await Promise.all(Array.from({ length: 5 }, (_, i) => writeAuditLog.appendEntry(fields(i))));
-    const seqs = (await AuditLog.find().sort({ seq: 1 })).map((l) => l.seq);
+    const seqs = (await sys(AuditLog).find().sort({ seq: 1 })).map((l) => l.seq);
     expect(seqs).toEqual([1, 2, 3, 4, 5]);
     const { token } = await makeUser("admin");
-    expect((await auth(request(app).get("/api/audit-log/verify"), token)).body.ok).toBe(true);
+    const ok = (await auth(request(app).get("/api/audit-log/verify"), token)).body;
+    expect(ok).toMatchObject({ ok: true, entries: 5, brokenInOrg: [] });
   });
 
   test("never throws, tolerates null actor and missing fields, caps details", async () => {
@@ -70,12 +71,12 @@ describe("writeAuditLog + hash chain", () => {
     await expect(writeAuditLog({ actor: null, action: "login_failed", targetType: "User", details: "x".repeat(5000) })).resolves.not.toThrow();
     await expect(writeAuditLog({ actor: null, action: "not-a-real-action", targetType: "User" })).resolves.toBeUndefined();
     await expect(writeAuditLog()).resolves.toBeUndefined();
-    const l = await AuditLog.findOne();
+    const l = await sys(AuditLog).findOne();
     expect(l.actorName).toBe("anonymous");
     expect(l.actorRole).toBe("none");
     expect(l.targetId).toBeUndefined();
     expect(l.details).toHaveLength(2000);
-    expect(await AuditLog.countDocuments()).toBe(1);
+    expect(await sys(AuditLog).countDocuments()).toBe(1);
     expect(errSpy).toHaveBeenCalledTimes(2); // the two invalid calls were logged, not thrown
     errSpy.mockRestore();
   });
@@ -84,7 +85,7 @@ describe("writeAuditLog + hash chain", () => {
     const { user } = await makeUser("admin");
     for (let i = 0; i < 5; i += 1) await entry(user, { details: `row ${i}` });
     await raw().insertOne({ actorName: "Old", actorRole: "admin", action: "approve", targetType: "Version", targetId: oid(), details: "legacy", createdAt: new Date(0) });
-    const { token } = await makeUser("admin");
+    const { token } = await makeUser("super_admin");
     const verify = () => auth(request(app).get("/api/audit-log/verify"), token);
 
     let res = await verify();
@@ -117,23 +118,23 @@ describe("append-only", () => {
   test("update / delete / replace operations are blocked with AUDIT_LOG_IMMUTABLE", async () => {
     const { user } = await makeUser("admin");
     await entry(user);
-    const doc = await AuditLog.findOne();
+    const doc = await sys(AuditLog).findOne();
     const id = doc._id;
-    await expect(AuditLog.updateOne({ _id: id }, { details: "x" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    await expect(AuditLog.updateMany({}, { details: "x" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    await expect(AuditLog.findOneAndUpdate({ _id: id }, { details: "x" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    await expect(AuditLog.findByIdAndUpdate(id, { details: "x" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    await expect(AuditLog.findOneAndReplace({ _id: id }, { actorName: "a" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    await expect(AuditLog.replaceOne({ _id: id }, { actorName: "a" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    await expect(AuditLog.deleteOne({ _id: id })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    await expect(AuditLog.deleteMany({})).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    await expect(AuditLog.findOneAndDelete({ _id: id })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    await expect(AuditLog.findByIdAndDelete(id)).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).updateOne({ _id: id }, { details: "x" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).updateMany({}, { details: "x" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).findOneAndUpdate({ _id: id }, { details: "x" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).findByIdAndUpdate(id, { details: "x" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).findOneAndReplace({ _id: id }, { actorName: "a" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).replaceOne({ _id: id }, { actorName: "a" })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).deleteOne({ _id: id })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).deleteMany({})).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).findOneAndDelete({ _id: id })).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
+    await expect(sys(AuditLog).findByIdAndDelete(id)).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
     await expect(doc.deleteOne()).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
     doc.details = "changed";
     await expect(doc.save()).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
-    expect((await AuditLog.findById(id)).details).toBe("d");
-    expect(await AuditLog.countDocuments()).toBe(1);
+    expect((await sys(AuditLog).findById(id)).details).toBe("d");
+    expect(await sys(AuditLog).countDocuments()).toBe(1);
   });
 });
 
@@ -150,7 +151,7 @@ describe("GET /api/audit-log", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual(expect.objectContaining({ page: 1, limit: 25, total: 32, pages: 2, scoped: false }));
     expect(res.body.logs).toHaveLength(25);
-    expect(Object.keys(res.body.logs[0]).sort()).toEqual(["_id", "action", "actorName", "actorRole", "createdAt", "details", "hash", "seq", "targetId", "targetType"]);
+    expect(Object.keys(res.body.logs[0]).sort()).toEqual(["_id", "action", "actorName", "actorRole", "createdAt", "details", "hash", "orgId", "seq", "targetId", "targetType"]);
     expect(res.body.logs[0].seq).toBe(32); // newest first
 
     res = await get("?page=2");
@@ -202,19 +203,20 @@ describe("GET /api/audit-log", () => {
     const B = await makeUser("ml_engineer", { name: "Bob ML" });
     const comp = await makeUser("compliance_officer");
 
+    const orgId = A.user.orgId; // raw inserts bypass the tenant plugin, so the org is set by hand
     const modelA = oid(), modelB = oid(), archivedModelA = oid();
     const verA = oid(), verOnAModelByOther = oid(), verB = oid(), verByAOnBModel = oid();
     // raw inserts so this test doesn't depend on the domain schemas' required fields
     await mongoose.connection.collection("models").insertMany([
-      { _id: modelA, name: "A model", createdBy: A.user._id },
-      { _id: modelB, name: "B model", createdBy: B.user._id },
-      { _id: archivedModelA, name: "A archived", createdBy: A.user._id, isDeleted: true },
+      { _id: modelA, name: "A model", createdBy: A.user._id, orgId },
+      { _id: modelB, name: "B model", createdBy: B.user._id, orgId },
+      { _id: archivedModelA, name: "A archived", createdBy: A.user._id, isDeleted: true, orgId },
     ]);
     await mongoose.connection.collection("versions").insertMany([
-      { _id: verA, modelId: modelA, versionNumber: 1, createdBy: A.user._id },
-      { _id: verOnAModelByOther, modelId: modelA, versionNumber: 2, createdBy: B.user._id },
-      { _id: verB, modelId: modelB, versionNumber: 1, createdBy: B.user._id },
-      { _id: verByAOnBModel, modelId: modelB, versionNumber: 2, createdBy: A.user._id },
+      { _id: verA, modelId: modelA, versionNumber: 1, createdBy: A.user._id, orgId },
+      { _id: verOnAModelByOther, modelId: modelA, versionNumber: 2, createdBy: B.user._id, orgId },
+      { _id: verB, modelId: modelB, versionNumber: 1, createdBy: B.user._id, orgId },
+      { _id: verByAOnBModel, modelId: modelB, versionNumber: 2, createdBy: A.user._id, orgId },
     ]);
 
     await entry(A.user, { targetId: oid(), details: "A acted on unrelated" }); // actorId = A
@@ -224,8 +226,8 @@ describe("GET /api/audit-log", () => {
     await entry(comp.user, { action: "approve", targetType: "Version", targetId: verB, details: "review of B version" });
     await entry(comp.user, { action: "archive_model", targetType: "Model", targetId: archivedModelA, details: "archived A model" });
     await entry(comp.user, { action: "approve", targetType: "Version", targetId: verByAOnBModel, details: "review of A's version on B model" });
-    await raw().insertOne({ actorName: "Alice ML", actorRole: "ml_engineer", action: "upload_version", targetType: "Version", targetId: oid(), details: "legacy by Alice", createdAt: new Date(1) });
-    await raw().insertOne({ actorName: "Bob ML", actorRole: "ml_engineer", action: "upload_version", targetType: "Version", targetId: oid(), details: "legacy by Bob", createdAt: new Date(2) });
+    await raw().insertOne({ orgId, actorName: "Alice ML", actorRole: "ml_engineer", action: "upload_version", targetType: "Version", targetId: oid(), details: "legacy by Alice", createdAt: new Date(1) });
+    await raw().insertOne({ orgId, actorName: "Bob ML", actorRole: "ml_engineer", action: "upload_version", targetType: "Version", targetId: oid(), details: "legacy by Bob", createdAt: new Date(2) });
 
     const res = await auth(request(app).get("/api/audit-log?limit=100"), A.token);
     expect(res.status).toBe(200);

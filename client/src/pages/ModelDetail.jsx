@@ -5,7 +5,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { useConfig } from "../context/ConfigContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import { useConfirm } from "../components/ConfirmDialog.jsx";
-import { roleHome } from "../roleHome.js";
+import { roleHome, isAdminRole } from "../roleHome.js";
 import StatusBadge from "../components/StatusBadge.jsx";
 import RiskBadge from "../components/RiskBadge.jsx";
 import VersionDetail from "../components/VersionDetail.jsx";
@@ -399,7 +399,7 @@ export default function ModelDetail() {
           {showLatest && <span className="chip" title="Most recently uploaded version">Latest: v{model.latestVersionNumber}</span>}
           <RiskBadge riskTier={tier} />
         </div>
-        {user?.role === "admin" && (
+        {isAdminRole(user?.role) && (
           <button type="button" className="danger" onClick={archiveModel} disabled={archiving} aria-busy={archiving}>
             <Icon name="trash" /> Archive model
           </button>

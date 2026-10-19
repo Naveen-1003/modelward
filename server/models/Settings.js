@@ -1,8 +1,8 @@
 const mongoose = require("mongoose");
+const { tenantPlugin } = require("../utils/tenant");
 
-// Singleton: exactly one document, identified by the fixed key "global".
+// One document per organization (the plugin's orgId is unique here).
 const settingsSchema = new mongoose.Schema({
-  key: { type: String, required: true, unique: true, default: "global" },
   lowAccuracy: { type: Number, required: true, min: 0.001, max: 1 },
   lowFairnessGap: { type: Number, required: true, min: 0.001, max: 1 },
   mediumAccuracy: { type: Number, required: true, min: 0.001, max: 1 },
@@ -10,5 +10,7 @@ const settingsSchema = new mongoose.Schema({
   driftThreshold: { type: Number, required: true, min: 0.001, max: 1 },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
 }, { timestamps: { createdAt: true, updatedAt: true } });
+
+settingsSchema.plugin(tenantPlugin, { unique: true });
 
 module.exports = mongoose.model("Settings", settingsSchema);
