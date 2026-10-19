@@ -3,7 +3,7 @@ import api, { extractError } from "../api/axios.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import Pagination from "./Pagination.jsx";
-import { Icon, ErrorBox, Loading } from "./ui.jsx";
+import { Cols, Icon, ErrorBox, Loading } from "./ui.jsx";
 import {
   ACTION_LABELS,
   actionLabel,
@@ -247,7 +247,8 @@ export default function AuditLogTable({ limit = 25, refreshKey }) {
       ) : (
         <>
           <div className="table-wrap scroll" aria-busy={loading}>
-            <table className="audit-table">
+            <table className="audit-table table-fixed" style={{ minWidth: showOrg ? "68rem" : "57rem" }}>
+              <Cols w={showOrg ? ["12.5rem", "11rem", "10rem", "8rem", "12rem", "auto"] : ["12.5rem", "10rem", "8rem", "12rem", "auto"]} />
               <thead>
                 <tr>
                   <th>When</th>

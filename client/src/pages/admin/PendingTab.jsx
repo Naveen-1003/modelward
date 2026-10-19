@@ -3,7 +3,7 @@ import api, { extractError } from "../../api/axios.js";
 import { useToast } from "../../context/ToastContext.jsx";
 import { useConfirm } from "../../components/ConfirmDialog.jsx";
 import { useMounted } from "../../components/featureUtils.js";
-import { Icon, Loading, ErrorBox } from "../../components/ui.jsx";
+import { Cols, Icon, Loading, ErrorBox } from "../../components/ui.jsx";
 import { formatDate, roleLabel } from "./format.js";
 
 // The server returns at most this many rows.
@@ -122,7 +122,8 @@ export default function PendingTab({ onChanged }) {
             <p className="note">Showing the newest {PENDING_CAP} of {data.total} requests. Approve or reject some to see the rest.</p>
           )}
           <div className="table-wrap" aria-busy={busy}>
-            <table>
+            <table className="table-fixed" style={{ minWidth: "51rem" }}>
+              <Cols w={["auto", "9rem", "12.5rem", "15rem"]} />
               <thead>
                 <tr>
                   <th>Name</th>

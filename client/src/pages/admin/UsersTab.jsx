@@ -4,7 +4,7 @@ import { useAuth } from "../../context/AuthContext.jsx";
 import { useToast } from "../../context/ToastContext.jsx";
 import { useConfirm } from "../../components/ConfirmDialog.jsx";
 import Pagination from "../../components/Pagination.jsx";
-import { Icon, Loading, ErrorBox } from "../../components/ui.jsx";
+import { Cols, Icon, Loading, ErrorBox } from "../../components/ui.jsx";
 import SetupLinkPanel from "./SetupLinkPanel.jsx";
 import { formatDate, roleLabel } from "./format.js";
 import { errorCode, serverFields } from "./orgUtils.js";
@@ -276,7 +276,8 @@ export default function UsersTab() {
       ) : (
         users.length > 0 && (
           <div className="table-wrap" aria-busy={loading}>
-            <table>
+            <table className="table-fixed" style={{ minWidth: "60rem" }}>
+              <Cols w={["auto", "9rem", "7rem", "12.5rem", "17rem"]} />
               <thead>
                 <tr>
                   <th>Name</th>

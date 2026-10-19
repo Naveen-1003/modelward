@@ -3,7 +3,7 @@ import api, { extractError } from "../../api/axios.js";
 import { useToast } from "../../context/ToastContext.jsx";
 import { useConfirm } from "../../components/ConfirmDialog.jsx";
 import { fmtDate } from "../../components/featureUtils.js";
-import { Icon, Loading, ErrorBox } from "../../components/ui.jsx";
+import { Cols, Icon, Loading, ErrorBox } from "../../components/ui.jsx";
 import SetupLinkPanel, { CopyButton } from "./SetupLinkPanel.jsx";
 import { MAX_DOMAINS, parseDomains, serverFields } from "./orgUtils.js";
 
@@ -307,7 +307,8 @@ export default function OrganizationsTab({ orgs, loading, error, onReload, onOpe
         !error && <div className="empty-state">No organizations yet. Create the first one to get started.</div>
       ) : (
         <div className="table-wrap" aria-busy={loading}>
-          <table>
+          <table className="table-fixed" style={{ minWidth: "58rem" }}>
+            <Cols w={["auto", "11.5rem", "7rem", "4.5rem", "5rem", "6.5rem", "10.5rem"]} />
             <thead>
               <tr>
                 <th>Organization</th>
@@ -316,7 +317,6 @@ export default function OrganizationsTab({ orgs, loading, error, onReload, onOpe
                 <th className="num">Users</th>
                 <th className="num">Models</th>
                 <th>Status</th>
-                <th>Created</th>
                 <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
@@ -328,7 +328,9 @@ export default function OrganizationsTab({ orgs, loading, error, onReload, onOpe
                   <tr key={o.id}>
                     <td>
                       <strong>{o.name}</strong>
-                      {activeOrgId === o.id && <span className="muted"> (selected)</span>}
+                      
+                      {activeOrgId === o.id && <span className="sub" style={{ textTransform: "none" }}>Selected</span>}
+                      <span className="sub" style={{ textTransform: "none" }}>Created {fmtDate(o.createdAt)}</span>
                       {o.address && <span className="sub" style={{ textTransform: "none" }}>{o.address}</span>}
                     </td>
                     <td className="muted" style={{ overflowWrap: "anywhere" }}>{o.contactEmail || "—"}</td>
@@ -338,9 +340,8 @@ export default function OrganizationsTab({ orgs, loading, error, onReload, onOpe
                     <td>
                       {suspended ? <span className="badge badge-status-rejected">Suspended</span> : <span className="badge badge-status-approved">Active</span>}
                     </td>
-                    <td className="mono muted nowrap">{fmtDate(o.createdAt)}</td>
                     <td className="num">
-                      <div className="cell-actions" style={{ justifyContent: "flex-end" }}>
+                      <div className="cell-actions" style={{ justifyContent: "flex-end", flexWrap: "wrap" }}>
                         <button type="button" onClick={() => onOpenOrg({ id: o.id, name: o.name })} disabled={busy}>
                           Open
                         </button>

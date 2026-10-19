@@ -46,6 +46,11 @@ export function Icon({ name, size = 16 }) {
   );
 }
 
+// Fixed-layout column widths: a table's columns never shift with its content (paging, filters, live rows).
+export function Cols({ w }) {
+  return <colgroup>{w.map((x, i) => <col key={i} style={{ width: x }} />)}</colgroup>;
+}
+
 export function PageHeader({ kicker, title, description, children }) {
   return (
     <header className="page-header">

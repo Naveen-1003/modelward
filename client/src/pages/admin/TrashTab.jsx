@@ -4,7 +4,7 @@ import { useToast } from "../../context/ToastContext.jsx";
 import { useConfirm } from "../../components/ConfirmDialog.jsx";
 import StatusBadge from "../../components/StatusBadge.jsx";
 import { useMounted } from "../../components/featureUtils.js";
-import { Icon, Loading, ErrorBox } from "../../components/ui.jsx";
+import { Cols, Icon, Loading, ErrorBox } from "../../components/ui.jsx";
 import { formatDate } from "./format.js";
 
 // The server returns at most this many rows per list.
@@ -80,7 +80,8 @@ export default function TrashTab() {
           <div className="empty-state">No archived models.</div>
         ) : (
           <div className="table-wrap">
-            <table>
+            <table className="table-fixed" style={{ minWidth: "56rem" }}>
+              <Cols w={["14rem", "12.5rem", "auto", "9rem", "9.5rem"]} />
               <thead>
                 <tr><th>Model</th><th>Archived</th><th>Reason</th><th>By</th><th><span className="sr-only">Actions</span></th></tr>
               </thead>
@@ -115,7 +116,8 @@ export default function TrashTab() {
           <div className="empty-state">No archived versions.</div>
         ) : (
           <div className="table-wrap">
-            <table>
+            <table className="table-fixed" style={{ minWidth: "63rem" }}>
+              <Cols w={["13rem", "8rem", "12.5rem", "auto", "9rem", "9.5rem"]} />
               <thead>
                 <tr><th>Version</th><th>Status</th><th>Archived</th><th>Reason</th><th>By</th><th><span className="sr-only">Actions</span></th></tr>
               </thead>

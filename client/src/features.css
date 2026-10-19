@@ -210,3 +210,8 @@ div.chip-list { display: flex; }
 @media (max-width: 560px) {
   .code-label { flex-basis: 100%; }
 }
+
+/* fixed-layout tables: action buttons stay on one line */
+.table-fixed .cell-actions { flex-wrap: nowrap; }
+.table-fixed .cell-actions button { white-space: nowrap; }
+.org-switcher select { min-width: 0; }

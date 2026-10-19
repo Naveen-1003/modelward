@@ -10,7 +10,7 @@ import MetricCard from "./MetricCard.jsx";
 import CommentThread from "./CommentThread.jsx";
 import MonitoringPanel from "./MonitoringPanel.jsx";
 import DownloadButton from "./DownloadButton.jsx";
-import { Icon, Loading, ErrorBox } from "./ui.jsx";
+import { Cols, Icon, Loading, ErrorBox } from "./ui.jsx";
 import { LIVE_STATUSES, MAX_COMMENT, MAX_NOTES, fmt, fmtDateTime, useMounted } from "./featureUtils.js";
 import { isAdminRole } from "../roleHome.js";
 
@@ -603,7 +603,8 @@ export default function VersionDetail({ versionId, onChanged, onClone }) {
             {config.enableDriftSimulation && isLive && simDone && <span className="muted small">Simulated run complete</span>}
           </div>
           <div className="table-wrap">
-            <table>
+            <table className="table-fixed" style={{ minWidth: "58rem" }}>
+              <Cols w={["12.5rem", "10rem", "6.5rem", "7.5rem", "6rem", "7.5rem", "7rem"]} />
               <thead>
                 <tr>
                   <th>When</th>
