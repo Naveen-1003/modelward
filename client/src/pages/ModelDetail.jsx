@@ -362,13 +362,14 @@ export default function ModelDetail() {
   }
 
   const home = roleHome(user?.role);
-  const backLabel = user?.role === "ml_engineer" ? "Registry" : user?.role === "compliance_officer" ? "Review queue" : "Overview";
+  const backLabel = user?.role === "ml_engineer" ? "Registry" : user?.role === "compliance_officer" ? "Review queue" : "Models";
+  const backTo = isAdminRole(user?.role) ? "/admin/models" : home;
 
   if (loading && !model && !notFound) return <main className="page"><Loading /></main>;
   if (notFound) {
     return (
       <main className="page">
-        <Link to={home} className="back-link"><Icon name="back" /> {backLabel}</Link>
+        <Link to={backTo} className="back-link"><Icon name="back" /> {backLabel}</Link>
         <div className="empty-state" role="status">
           <p><strong>This model could not be found.</strong></p>
           <p>It may have been archived or removed.</p>
@@ -379,7 +380,7 @@ export default function ModelDetail() {
   if (error && !model) {
     return (
       <main className="page">
-        <Link to={home} className="back-link"><Icon name="back" /> {backLabel}</Link>
+        <Link to={backTo} className="back-link"><Icon name="back" /> {backLabel}</Link>
         <ErrorBox>{error}</ErrorBox>
       </main>
     );
@@ -392,7 +393,7 @@ export default function ModelDetail() {
 
   return (
     <main className="page">
-      <Link to={home} className="back-link"><Icon name="back" /> {backLabel}</Link>
+      <Link to={backTo} className="back-link"><Icon name="back" /> {backLabel}</Link>
       <PageHeader kicker="Governance record" title={model.name} description={model.description || "No description provided."}>
         <div className="header-chips">
           {hasLive && <span className="chip chip-live" title="Version currently live">Live: v{model.liveVersionNumber}</span>}

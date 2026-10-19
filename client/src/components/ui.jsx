@@ -21,6 +21,8 @@ const PATHS = {
   refresh: "M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5",
   close: "M6 6l12 12M18 6L6 18",
   file: "M6 3h8l5 5v13H6zM14 3v5h5",
+  org: "M4 21V7l8-4 8 4v14M9 21v-5h6v5M9 10h.01M15 10h.01M9 13h.01M15 13h.01",
+  pending: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
   info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v6M12 7.5v.01",
 };
 

@@ -100,7 +100,12 @@ a { color: var(--accent); text-underline-offset: 3px; }
 }
 .brand { display: flex; align-items: center; gap: 0.6rem; padding: 0 0.4rem; color: var(--ink); text-decoration: none; font: 600 1.05rem var(--font-display); }
 .brand-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 5px; background: var(--ink); color: var(--on-ink); font: 500 0.7rem var(--font-mono); letter-spacing: 0.02em; }
-.sidebar nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.sidebar nav { display: flex; flex-direction: column; gap: 1.1rem; flex: 1; min-height: 0; overflow-y: auto; }
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-group-label { padding: 0 0.6rem 0.3rem; font: 500 0.66rem var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+.nav-label { flex: 1; min-width: 0; }
+.nav-badge { min-width: 1.35rem; padding: 0 0.4rem; border-radius: 999px; background: var(--warn-bg); color: var(--warn); font: 600 0.72rem/1.35rem var(--font-mono); text-align: center; }
+.nav-item.active .nav-badge { background: var(--on-ink); color: var(--ink); }
 .nav-item { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.6rem; border-radius: var(--radius); color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 0.9rem; transition: background 150ms var(--ease), color 150ms var(--ease); }
 .nav-item:hover { background: var(--neutral-bg); color: var(--ink); }
 .nav-item.active { background: var(--ink); color: var(--on-ink); }
@@ -412,7 +417,10 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 @media (max-width: 760px) {
   .app-shell.has-sidebar { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 0.5rem 1rem; padding: 0.6rem 1rem; border-right: 0; border-bottom: 1px solid var(--line); }
-  .sidebar nav { flex: 1 1 auto; flex-direction: row; order: 3; width: 100%; }
+  .sidebar nav { flex: 1 1 auto; flex-direction: row; gap: 0.25rem; order: 3; width: 100%; overflow-x: auto; overflow-y: hidden; }
+  .nav-group { flex-direction: row; gap: 0.25rem; }
+  .nav-group-label { display: none; }
+  .nav-item { white-space: nowrap; }
   .sidebar-user { margin-left: auto; padding: 0; border: 0; }
   .who { display: none; }
   .auth-page { grid-template-columns: 1fr; }

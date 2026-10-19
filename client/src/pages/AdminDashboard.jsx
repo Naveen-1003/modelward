@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { ADMIN_SECTIONS } from "../navConfig.js";
+import { setNavCounts } from "../navCounts.js";
 import api, { extractError } from "../api/axios.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { PageHeader } from "../components/ui.jsx";
@@ -13,19 +16,9 @@ import OrgSettingsTab from "./admin/OrgSettingsTab.jsx";
 import ThresholdsTab from "./admin/ThresholdsTab.jsx";
 import TrashTab from "./admin/TrashTab.jsx";
 
-// scope "org": needs an organization (the admin's own, or the one a platform admin selected).
-// scope "platform": works without one (the audit log then covers every organization).
-const ORG_TABS = [
-  { id: "overview", label: "Overview", scope: "org" },
-  { id: "models", label: "Models", scope: "org" },
-  { id: "users", label: "Users", scope: "org" },
-  { id: "pending", label: "Pending", scope: "org" },
-  { id: "organization", label: "Organization", scope: "org" },
-  { id: "thresholds", label: "Thresholds", scope: "org" },
-  { id: "trash", label: "Trash", scope: "org" },
-  { id: "audit", label: "Audit log", scope: "platform" },
-];
-const PLATFORM_TABS = [{ id: "orgs", label: "Organizations", scope: "platform" }, ...ORG_TABS];
+// platform sections work without an organization (the audit log then covers every one);
+// the rest need one (the admin's own, or the one a platform admin selected).
+const scopeOf = (sec) => (sec.platform || sec.id === "audit" ? "platform" : "org");
 
 export default function AdminDashboard() {
   const { user, activeOrg: storedOrg, setActiveOrg } = useAuth();
@@ -36,9 +29,10 @@ export default function AdminDashboard() {
   // Everything org-scoped is keyed by this, so nothing from a previously selected organization survives a switch.
   const scopeKey = isSuper ? orgId || "none" : "own";
 
-  const TABS = isSuper ? PLATFORM_TABS : ORG_TABS;
-  const [active, setActive] = useState(isSuper ? "orgs" : "overview");
-  const tabRefs = useRef({});
+  const navigate = useNavigate();
+  const section = useParams()["*"] || "";
+  const defaultSection = isSuper ? "orgs" : "overview";
+  const setActive = useCallback((id) => navigate(`/admin/${id}`), [navigate]);
 
   // --- organizations (platform admin only) -------------------------------------------------
   const [orgs, setOrgs] = useState(null);
@@ -98,6 +92,10 @@ export default function AdminDashboard() {
   }, [needsOrg]);
 
   useEffect(() => {
+    setNavCounts({ pending: needsOrg ? 0 : pendingCount });
+  }, [pendingCount, needsOrg]);
+
+  useEffect(() => {
     setPendingCount(0);
     refreshPending();
     // coming back to this browser tab: somebody may have signed up meanwhile
@@ -125,35 +123,22 @@ export default function AdminDashboard() {
     [selectOrg]
   );
 
-  // WAI-ARIA tabs: arrows move between tabs, Home/End jump to the ends.
-  function onKeyDown(e) {
-    const i = TABS.findIndex((t) => t.id === active);
-    let next = null;
-    if (e.key === "ArrowRight") next = (i + 1) % TABS.length;
-    else if (e.key === "ArrowLeft") next = (i - 1 + TABS.length) % TABS.length;
-    else if (e.key === "Home") next = 0;
-    else if (e.key === "End") next = TABS.length - 1;
-    if (next === null) return;
-    e.preventDefault();
-    setActive(TABS[next].id);
-    tabRefs.current[TABS[next].id]?.focus();
-  }
-
-  const current = TABS.find((t) => t.id === active) || TABS[0];
+  const current = ADMIN_SECTIONS.find((t) => t.id === section && (isSuper || !t.platform || t.id === "audit"));
+  const currentId = current?.id;
 
   const panel = useMemo(() => {
-    if (current.scope === "org" && needsOrg) {
+    if (current && scopeOf(current) === "org" && needsOrg) {
       return (
         <div className="empty-state">
           <p><strong>Select an organization to view this section</strong></p>
           <p className="small">
             Choose one in the selector above, or open one from the{" "}
-            <button type="button" className="link-btn" onClick={() => setActive("orgs")}>Organizations</button> tab.
+            <button type="button" className="link-btn" onClick={() => setActive("orgs")}>Organizations</button> page.
           </p>
         </div>
       );
     }
-    switch (current.id) {
+    switch (currentId) {
       case "orgs":
         return (
           <OrganizationsTab
@@ -184,26 +169,16 @@ export default function AdminDashboard() {
       default:
         return null;
     }
-  }, [current, needsOrg, orgs, orgsLoading, orgsError, loadOrgs, openOrg, orgId, refreshPending]);
+  }, [current, currentId, needsOrg, orgs, orgsLoading, orgsError, loadOrgs, openOrg, orgId, refreshPending]);
+
+  if (!current) return <Navigate to={`/admin/${defaultSection}`} replace />;
 
   const orgName = user?.orgName;
-  const header = isSuper
-    ? {
-        kicker: "Platform admin",
-        title: "Platform overview",
-        description: activeOrg
-          ? `Working inside ${activeOrg.name}. Manage organizations, or switch to another one above.`
-          : "Create and manage organizations, then open one to see its models, users and settings. The audit log covers every organization.",
-      }
-    : {
-        kicker: orgName ? `${orgName} · Admin` : "Admin",
-        title: "Governance overview",
-        description: "Model risk, review status and deployment across your organization, plus users, sign-ups, thresholds and archived items.",
-      };
+  const scopeLabel = isSuper ? (activeOrg ? `${activeOrg.name} · Platform admin` : "Platform admin") : orgName ? `${orgName} · Admin` : "Admin";
 
   return (
     <main className="page">
-      <PageHeader kicker={header.kicker} title={header.title} description={header.description} />
+      <PageHeader kicker={scopeLabel} title={current.title} description={current.description} />
 
       {isSuper && (
         <OrgSwitcher
@@ -216,34 +191,7 @@ export default function AdminDashboard() {
         />
       )}
 
-      <div className="tabs" role="tablist" aria-label="Admin sections" onKeyDown={onKeyDown}>
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            id={`admin-tab-${t.id}`}
-            aria-selected={active === t.id}
-            aria-controls="admin-panel"
-            tabIndex={active === t.id ? 0 : -1}
-            className="tab"
-            ref={(el) => {
-              tabRefs.current[t.id] = el;
-            }}
-            onClick={() => setActive(t.id)}
-          >
-            {t.label}
-            {t.id === "pending" && pendingCount > 0 && !needsOrg && (
-              <>
-                <span className="count-pill count-pill-attn" aria-hidden="true">{pendingCount > 99 ? "99+" : pendingCount}</span>
-                <span className="sr-only"> ({pendingCount} waiting)</span>
-              </>
-            )}
-          </button>
-        ))}
-      </div>
-
-      <div role="tabpanel" id="admin-panel" aria-labelledby={`admin-tab-${current.id}`}>
+      <div id="admin-panel">
         <React.Fragment key={`${current.id}:${scopeKey}`}>{panel}</React.Fragment>
       </div>
     </main>

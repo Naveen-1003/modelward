@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
+import { COMPLIANCE_SECTIONS } from "../navConfig.js";
+import { setNavCounts } from "../navCounts.js";
 import api, { extractError } from "../api/axios.js";
 import RiskBadge from "../components/RiskBadge.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
@@ -103,6 +105,8 @@ function AttentionSection({ title, description, data, onPage, emptyText, id }) {
 }
 
 export default function ComplianceDashboard() {
+  const section = useParams()["*"] || "";
+  const sec = COMPLIANCE_SECTIONS.find((x) => x.id === section);
   // The selected queue item is remembered with its model, so the right-hand panel (and its
   // "Open model page" link) keeps working after a decision moves the version out of the queue.
   const [selection, setSelection] = useState(null); // { versionId, modelId, modelName }
@@ -117,6 +121,11 @@ export default function ComplianceDashboard() {
   const queue = useVersions("submitted", { page: queuePage, limit: 10, q, refreshKey });
   const attention = useVersions("needs_review", { page: attnPage, limit: 10, q: "", refreshKey });
   const deployable = useVersions("approved", { page: deployPage, limit: 10, q: "", refreshKey });
+
+  // sidebar badges
+  useEffect(() => {
+    setNavCounts({ queue: queue.total, attention: attention.total, deploy: deployable.total });
+  }, [queue.total, attention.total, deployable.total]);
 
   // Acting on the last item of a later page leaves it empty: fall back to page 1.
   useEffect(() => {
@@ -148,129 +157,132 @@ export default function ComplianceDashboard() {
   const leftQueue = !!selection && !queue.items.some((v) => v._id === selection.versionId);
   const showRecorded = leftQueue && recordedFor === selection.versionId && !queue.loading;
 
+  if (!sec) return <Navigate to="/compliance" replace />;
+
   return (
     <main className="page">
-      <PageHeader
-        kicker="Compliance"
-        title="Review queue"
-        description="Versions awaiting review, newest first, plus anything that needs a decision."
-      >
-        <div className="count"><b className="mono">{queue.total}</b> awaiting</div>
+      <PageHeader kicker={sec.kicker} title={sec.title} description={sec.description}>
+        {section === "" && <div className="count"><b className="mono">{queue.total}</b> awaiting</div>}
       </PageHeader>
 
-      {attention.total > 0 && (
+      {section === "" && attention.total > 0 && (
         <p className="banner banner-warn banner-inline" role="status">
           <Icon name="alert" size={18} />
-          <span>{attention.total} live {attention.total === 1 ? "version needs" : "versions need"} a compliance decision after drift.</span>
+          <span>
+            {attention.total} live {attention.total === 1 ? "version needs" : "versions need"} a compliance decision after drift.{" "}
+            <Link to="/compliance/attention">Open drift decisions</Link>
+          </span>
         </p>
       )}
 
-      <section aria-labelledby="queue-h">
-        <div className="section-head">
-          <h2 id="queue-h">Awaiting review <span className="count-pill mono">{queue.total}</span></h2>
-          <form className="inline-search" role="search" onSubmit={(e) => e.preventDefault()}>
-            <label>
-              <span className="sr-only">Search review queue</span>
-              <input
-                type="search"
-                placeholder="Search by model name"
-                maxLength={120}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </label>
-          </form>
-        </div>
-
-        <ErrorBox>{queue.error}</ErrorBox>
-
-        {queue.loading && queue.items.length === 0 ? (
-          <Loading />
-        ) : queue.items.length === 0 && !selectedVersionId ? (
-          !queue.error && (
-            <div className="empty-state">
-              {q ? "No versions in the queue match your search." : "Nothing waiting for review right now."}
-            </div>
-          )
-        ) : (
-          <div className="split">
-            <div>
-              <nav className="queue" aria-label="Review queue" aria-busy={queue.loading}>
-                {queue.items.length === 0 && <div className="empty-state">{q ? "No matches." : "Queue cleared."}</div>}
-                {queue.items.map((v) => (
-                  <button
-                    key={v._id}
-                    className={`queue-item${v._id === selectedVersionId ? " is-selected" : ""}`}
-                    aria-current={v._id === selectedVersionId ? "true" : undefined}
-                    onClick={() => select(v)}
-                  >
-                    <span className="queue-top">
-                      <strong>{modelNameOf(v)}</strong>
-                      <span className="mono">v{v.versionNumber}</span>
-                    </span>
-                    <span className="queue-bottom">
-                      <RiskBadge riskTier={v.riskTier} />
-                      <span className="muted small">{fmtDate(v.createdAt)}</span>
-                    </span>
-                  </button>
-                ))}
-              </nav>
-              <Pagination page={queue.page} pages={queue.pages} total={queue.total} limit={10} onPage={setQueuePage} />
-            </div>
-            <div className="split-detail">
-              {selectedVersionId && (
-                <>
-                  {selection.modelId && (
-                    <Link className="back-link" to={`/models/${selection.modelId}?version=${selection.versionId}`}>
-                      Open {selection.modelName} model page
-                    </Link>
-                  )}
-                  {showRecorded && (
-                    <p className="note" role="status">
-                      Decision recorded. This version has left the review queue; you can still open its model page.
-                    </p>
-                  )}
-                  <VersionDetail
-                    versionId={selectedVersionId}
-                    onChanged={() => {
-                      setRecordedFor(selectedVersionId);
-                      setRefreshKey((k) => k + 1);
-                    }}
+      {section === "" && (
+        <>
+          <section aria-labelledby="queue-h">
+            <div className="section-head">
+              <h2 id="queue-h">Awaiting review <span className="count-pill mono">{queue.total}</span></h2>
+              <form className="inline-search" role="search" onSubmit={(e) => e.preventDefault()}>
+                <label>
+                  <span className="sr-only">Search review queue</span>
+                  <input
+                    type="search"
+                    placeholder="Search by model name"
+                    maxLength={120}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
                   />
-                </>
-              )}
+                </label>
+              </form>
             </div>
-          </div>
-        )}
-      </section>
 
-      <AttentionSection
-        id="attention-h"
-        title="Needs attention"
-        description="Live versions flagged by drift monitoring"
-        data={attention}
-        onPage={setAttnPage}
-        emptyText="No live versions are waiting on a drift decision."
-      />
+            <ErrorBox>{queue.error}</ErrorBox>
 
-      <AttentionSection
-        id="deploy-h"
-        title="Awaiting deployment"
-        description="Approved versions that are not live yet"
-        data={deployable}
-        onPage={setDeployPage}
-        emptyText="No approved versions are waiting to be deployed."
-      />
+            {queue.loading && queue.items.length === 0 ? (
+              <Loading />
+            ) : queue.items.length === 0 && !selectedVersionId ? (
+              !queue.error && (
+                <div className="empty-state">
+                  {q ? "No versions in the queue match your search." : "Nothing waiting for review right now."}
+                </div>
+              )
+            ) : (
+              <div className="split">
+                <div>
+                  <nav className="queue" aria-label="Review queue" aria-busy={queue.loading}>
+                    {queue.items.length === 0 && <div className="empty-state">{q ? "No matches." : "Queue cleared."}</div>}
+                    {queue.items.map((v) => (
+                      <button
+                        key={v._id}
+                        className={`queue-item${v._id === selectedVersionId ? " is-selected" : ""}`}
+                        aria-current={v._id === selectedVersionId ? "true" : undefined}
+                        onClick={() => select(v)}
+                      >
+                        <span className="queue-top">
+                          <strong>{modelNameOf(v)}</strong>
+                          <span className="mono">v{v.versionNumber}</span>
+                        </span>
+                        <span className="queue-bottom">
+                          <RiskBadge riskTier={v.riskTier} />
+                          <span className="muted small">{fmtDate(v.createdAt)}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </nav>
+                  <Pagination page={queue.page} pages={queue.pages} total={queue.total} limit={10} onPage={setQueuePage} />
+                </div>
+                <div className="split-detail">
+                  {selectedVersionId && (
+                    <>
+                      {selection.modelId && (
+                        <Link className="back-link" to={`/models/${selection.modelId}?version=${selection.versionId}`}>
+                          Open {selection.modelName} model page
+                        </Link>
+                      )}
+                      {showRecorded && (
+                        <p className="note" role="status">
+                          Decision recorded. This version has left the review queue; you can still open its model page.
+                        </p>
+                      )}
+                      <VersionDetail
+                        versionId={selectedVersionId}
+                        onChanged={() => {
+                          setRecordedFor(selectedVersionId);
+                          setRefreshKey((k) => k + 1);
+                        }}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
+        </>
+      )}
 
-      <section className="section" aria-labelledby="models-h">
-        <div className="section-head">
-          <h2 id="models-h">All models</h2>
-          <span className="muted">Browse the full registry</span>
-        </div>
-        <ModelBrowser />
-      </section>
+      {section === "attention" && (
+        <AttentionSection
+          id="attention-h"
+          title="Needs attention"
+          description="Live versions flagged by drift monitoring"
+          data={attention}
+          onPage={setAttnPage}
+          emptyText="No live versions are waiting on a drift decision."
+        />
+      )}
 
-      <AuditLogTable refreshKey={refreshKey} />
+      {section === "deploy" && (
+        <AttentionSection
+          id="deploy-h"
+          title="Awaiting deployment"
+          description="Approved versions that are not live yet"
+          data={deployable}
+          onPage={setDeployPage}
+          emptyText="No approved versions are waiting to be deployed."
+        />
+      )}
+
+      {section === "models" && <ModelBrowser />}
+
+      {section === "activity" && <AuditLogTable refreshKey={refreshKey} />}
     </main>
   );
 }

@@ -37,7 +37,7 @@ export default function App() {
         <Route path="/setup-password" element={<SetupPassword />} />
 
         <Route
-          path="/ml"
+          path="/ml/*"
           element={
             <ProtectedRoute roles={["ml_engineer"]}>
               <MLDashboard />
@@ -53,7 +53,7 @@ export default function App() {
           }
         />
         <Route
-          path="/compliance"
+          path="/compliance/*"
           element={
             <ProtectedRoute roles={["compliance_officer"]}>
               <ComplianceDashboard />
@@ -61,7 +61,7 @@ export default function App() {
           }
         />
         <Route
-          path="/admin"
+          path="/admin/*"
           element={
             <ProtectedRoute roles={["admin", "super_admin"]}>
               <AdminDashboard />

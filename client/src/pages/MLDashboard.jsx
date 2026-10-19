@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Navigate, useParams } from "react-router-dom";
+import { ML_SECTIONS } from "../navConfig.js";
 import api, { extractError } from "../api/axios.js";
 import { useToast } from "../context/ToastContext.jsx";
 import ModelList from "../components/ModelList.jsx";
@@ -22,6 +24,21 @@ function validate(form) {
 }
 
 export default function MLDashboard() {
+  const section = useParams()["*"] || "";
+  const meta0 = ML_SECTIONS.find((x) => x.id === section);
+  if (!meta0) return <Navigate to="/ml" replace />;
+  if (section === "activity") {
+    return (
+      <main className="page">
+        <PageHeader kicker={meta0.kicker} title={meta0.title} description={meta0.description} />
+        <AuditLogTable />
+      </main>
+    );
+  }
+  return <MLRegistry />;
+}
+
+function MLRegistry() {
   const toast = useToast();
   const mounted = useMounted();
   const reqId = useRef(0);
@@ -209,7 +226,6 @@ export default function MLDashboard() {
         </div>
       )}
 
-      <AuditLogTable refreshKey={refreshKey} />
     </main>
   );
 }
