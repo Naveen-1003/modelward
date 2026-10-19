@@ -3,6 +3,7 @@ import api, { extractError } from "../../api/axios.js";
 import { useToast } from "../../context/ToastContext.jsx";
 import { useConfirm } from "../../components/ConfirmDialog.jsx";
 import { useMounted } from "../../components/featureUtils.js";
+import RowMenu from "../../components/RowMenu.jsx";
 import { Cols, Icon, Loading, ErrorBox } from "../../components/ui.jsx";
 import { formatDate, roleLabel } from "./format.js";
 
@@ -122,8 +123,8 @@ export default function PendingTab({ onChanged }) {
             <p className="note">Showing the newest {PENDING_CAP} of {data.total} requests. Approve or reject some to see the rest.</p>
           )}
           <div className="table-wrap" aria-busy={busy}>
-            <table className="table-fixed" style={{ minWidth: "51rem" }}>
-              <Cols w={["auto", "9rem", "12.5rem", "15rem"]} />
+            <table className="table-fixed" style={{ minWidth: "40rem" }}>
+              <Cols w={["auto", "9rem", "12.5rem", "3.5rem"]} />
               <thead>
                 <tr>
                   <th>Name</th>
@@ -144,14 +145,14 @@ export default function PendingTab({ onChanged }) {
                       <td>{roleLabel(u.role)}</td>
                       <td className="mono muted nowrap">{formatDate(u.createdAt)}</td>
                       <td className="num">
-                        <div className="cell-actions" style={{ justifyContent: "flex-end" }}>
-                          <button type="button" onClick={() => approve(u)} disabled={busy} aria-busy={rowBusy}>
-                            Approve
-                          </button>
-                          <button type="button" className="danger" onClick={() => reject(u)} disabled={busy}>
-                            Reject
-                          </button>
-                        </div>
+                        <RowMenu
+                          label={`Actions for ${u.name}`}
+                          busy={busy}
+                          items={[
+                            { label: "Approve", onClick: () => approve(u) },
+                            { label: "Reject", danger: true, onClick: () => reject(u) },
+                          ]}
+                        />
                       </td>
                     </tr>
                   );

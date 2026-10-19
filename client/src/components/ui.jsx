@@ -23,6 +23,7 @@ const PATHS = {
   file: "M6 3h8l5 5v13H6zM14 3v5h5",
   org: "M4 21V7l8-4 8 4v14M9 21v-5h6v5M9 10h.01M15 10h.01M9 13h.01M15 13h.01",
   pending: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
+  more: "M12 5.5v.01M12 12v.01M12 18.5v.01",
   info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v6M12 7.5v.01",
 };
 
@@ -41,7 +42,7 @@ export function Icon({ name, size = 16 }) {
       aria-hidden="true"
       focusable="false"
     >
-      <path d={PATHS[name]} />
+      <path d={PATHS[name]} strokeWidth={name === "more" ? 3 : undefined} />
     </svg>
   );
 }

@@ -31,6 +31,7 @@ const ORG_ACTION_LABELS = {
   email_verified: "Email verified",
   user_approve: "Sign-up approved",
   user_reject: "Sign-up rejected",
+  user_delete: "User deleted",
   setup_link_issued: "Setup link issued",
   password_setup: "Password set",
   cross_org_attempt: "Cross-organization attempt",

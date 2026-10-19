@@ -4,6 +4,7 @@ import { useAuth } from "../../context/AuthContext.jsx";
 import { useToast } from "../../context/ToastContext.jsx";
 import { useConfirm } from "../../components/ConfirmDialog.jsx";
 import Pagination from "../../components/Pagination.jsx";
+import RowMenu from "../../components/RowMenu.jsx";
 import { Cols, Icon, Loading, ErrorBox } from "../../components/ui.jsx";
 import SetupLinkPanel from "./SetupLinkPanel.jsx";
 import { formatDate, roleLabel } from "./format.js";
@@ -192,6 +193,27 @@ export default function UsersTab() {
     if (ok) patchUser(u, { isActive: !deactivating }, `${u.name} ${deactivating ? "deactivated" : "activated"}.`);
   }
 
+  async function deleteUser(u) {
+    const ok = await confirm({
+      title: "Delete user permanently?",
+      message: `${u.name} (${u.email}) is removed from the database and their join-code seat is freed. This cannot be undone. Models, versions and comments they created stay, without their name, and the audit log keeps its record. To keep the account but block sign-in, use Deactivate instead.`,
+      confirmLabel: "Delete user",
+      danger: true,
+    });
+    if (!ok) return;
+    setBusyId(u.id);
+    try {
+      await api.delete(`/users/${u.id}`);
+      toast.success(`${u.name} was deleted.`);
+      if (users.length === 1 && page > 1) setPage(page - 1);
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      toast.error(extractError(err));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function resendLink(u) {
     setBusyId(u.id);
     try {
@@ -276,8 +298,8 @@ export default function UsersTab() {
       ) : (
         users.length > 0 && (
           <div className="table-wrap" aria-busy={loading}>
-            <table className="table-fixed" style={{ minWidth: "60rem" }}>
-              <Cols w={["auto", "9rem", "7rem", "12.5rem", "17rem"]} />
+            <table className="table-fixed" style={{ minWidth: "44rem" }}>
+              <Cols w={["auto", "9rem", "7rem", "12.5rem", "3.5rem"]} />
               <thead>
                 <tr>
                   <th>Name</th>
@@ -312,24 +334,15 @@ export default function UsersTab() {
                       </td>
                       <td className="mono muted nowrap">{formatDate(u.createdAt)}</td>
                       <td className="num">
-                        <div className="cell-actions" style={{ justifyContent: "flex-end" }}>
-                          {invited && (
-                            <button type="button" className="secondary" onClick={() => resendLink(u)} disabled={busy} aria-busy={busy}>
-                              Resend setup link
-                            </button>
-                          )}
-                          <span title={lockTip}>
-                            <button
-                              type="button"
-                              className={active ? "danger" : "secondary"}
-                              onClick={() => toggleActive(u)}
-                              disabled={isSelf || busy}
-                              aria-busy={busy}
-                            >
-                              {active ? "Deactivate" : "Activate"}
-                            </button>
-                          </span>
-                        </div>
+                        <RowMenu
+                          label={`Actions for ${u.name}`}
+                          busy={busy}
+                          items={[
+                            { label: "Resend setup link", hidden: !invited, onClick: () => resendLink(u) },
+                            { label: active ? "Deactivate" : "Activate", danger: active, disabled: isSelf, title: lockTip, onClick: () => toggleActive(u) },
+                            { label: "Delete user", danger: true, disabled: isSelf, title: isSelf ? "You can't delete yourself" : undefined, onClick: () => deleteUser(u) },
+                          ]}
+                        />
                       </td>
                     </tr>
                   );

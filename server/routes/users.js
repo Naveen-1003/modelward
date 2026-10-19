@@ -354,4 +354,46 @@ async function applyPatch(req, data) {
   return { status: 200, body: { user: target.toSafeJSON() } };
 }
 
+// Permanently removes a member's account (name, email, password hash) and gives their join-code
+// seat back. Records they authored (models, versions, comments) belong to the organization and
+// stay, without a name; audit entries keep their own snapshot of who acted. Same last-admin and
+// self-protection rules as deactivating.
+router.delete("/:id", async (req, res) => {
+  try {
+    const outcome = await withUserLock(() => applyDelete(req));
+    res.status(outcome.status).json(outcome.body);
+  } catch (err) {
+    serverError(res, err, "Failed to delete user");
+  }
+});
+
+async function applyDelete(req) {
+  const actor = await User.findById(req.user._id).select("role isActive").setOptions({ bypassTenant: true });
+  if (!actor || actor.isActive === false) return { status: 401, body: { error: "Account is deactivated" } };
+  if (!isAdmin(actor)) return { status: 403, body: { error: `Role '${actor.role}' is not permitted to perform this action` } };
+
+  const target = await User.findOne({ _id: req.params.id, status: { $nin: NOT_MEMBER } });
+  if (!target) return { status: 404, body: { error: "User not found" } };
+  if (String(target._id) === String(req.user._id)) return { status: 400, body: { error: "You cannot delete your own account" } };
+  if (isActiveAdmin(target) && (await User.countDocuments({ ...ACTIVE_ADMIN, _id: { $ne: target._id } })) === 0) {
+    return { status: 400, body: { error: "Cannot delete the last active admin" } };
+  }
+
+  const removed = await User.findOneAndDelete({ _id: target._id, status: { $nin: NOT_MEMBER } });
+  if (!removed) return { status: 404, body: { error: "User not found" } };
+  try {
+    await releaseSeat(removed.orgId, removed.seatKind, removed.seatGen);
+  } catch (err) {
+    console.error(`[users] could not release the seat of deleted user ${removed._id}:`, err && err.message);
+  }
+  await writeAuditLog({
+    actor: req.user,
+    action: "user_delete",
+    targetType: "User",
+    targetId: removed._id,
+    details: `Deleted ${removed.email} (${removed.role})`,
+  });
+  return { status: 200, body: { ok: true } };
+}
+
 module.exports = router;

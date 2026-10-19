@@ -234,3 +234,43 @@ describe("patch", () => {
     expect((await patch(a, a.user._id, { isActive: false })).status).toBe(400);
   });
 });
+
+describe("delete", () => {
+  const del = (token, id) => auth(request(app).delete(`/api/users/${id}`), token);
+
+  test("removes the account, frees the email, keeps an audit row; the user's token stops working", async () => {
+    const { token } = await makeUser("admin");
+    const { user, token: userToken } = await makeUser("ml_engineer", { email: "gone@test.local" });
+    const res = await del(token, user._id);
+    expect(res.status).toBe(200);
+    expect(await sys(User).countDocuments({ _id: user._id })).toBe(0);
+    expect((await auth(request(app).get("/api/models"), userToken)).status).toBe(401);
+    const row = await sys(AuditLog).findOne({ action: "user_delete", targetId: user._id });
+    expect(row.details).toMatch(/gone@test\.local/);
+    // the address is free again
+    expect((await auth(request(app).post("/api/users"), token).send({ name: "Back Again", email: "gone@test.local", role: "ml_engineer", allowExternalEmail: true })).status).toBe(201);
+  });
+
+  test("cannot delete yourself or the last active admin; 404 for unknown / pending / other org", async () => {
+    const { user: admin, token } = await makeUser("admin");
+    expect((await del(token, admin._id)).status).toBe(400);
+    const { token: t2, user: admin2 } = await makeUser("admin");
+    expect((await del(t2, admin._id)).status).toBe(200); // one admin remains (themself)
+    expect((await del(t2, admin2._id)).status).toBe(400);
+    expect((await del(t2, "64b000000000000000000000")).status).toBe(404);
+    const { user: pending } = await makeUser("ml_engineer", { status: "pending" });
+    expect((await del(t2, pending._id)).status).toBe(404);
+    const other = await makeOrg();
+    const { user: foreign } = await makeUser("ml_engineer", { orgId: other._id });
+    expect((await del(t2, foreign._id)).status).toBe(404);
+    expect(await sys(User).countDocuments({ _id: foreign._id })).toBe(1);
+  });
+
+  test("ml engineers and compliance officers get 403", async () => {
+    const { user: victim } = await makeUser("ml_engineer");
+    for (const role of ["ml_engineer", "compliance_officer"]) {
+      const { token } = await makeUser(role);
+      expect((await del(token, victim._id)).status).toBe(403);
+    }
+  });
+});

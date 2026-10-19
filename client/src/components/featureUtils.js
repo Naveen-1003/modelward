@@ -114,6 +114,7 @@ export const ACTION_LABELS = {
   login_failed: "Failed sign-in",
   create_user: "User created",
   update_user: "User updated",
+  user_delete: "User deleted",
   update_settings: "Thresholds updated",
   create_model: "Model created",
   archive_model: "Model archived",

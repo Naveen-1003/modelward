@@ -46,6 +46,7 @@ module.exports = [
   "email_verified",
   "user_approve",
   "user_reject",
+  "user_delete",
   "setup_link_issued",
   "password_setup",
   "cross_org_attempt", // an id of another organization was requested (answered 404)

@@ -202,6 +202,7 @@ const ID_ROUTES = [
   R("GET", "/api/versions/:id/file", "version", { queries: ["", "?which=dataset"] }),
   R("GET", "/api/versions/:id/comments", "version"),
   R("POST", "/api/versions/:id/comments", "version", { body: { body: "pwned" } }),
+  R("DELETE", "/api/users/:id", "user"),
   R("PATCH", "/api/users/:id", "user", { body: { name: "pwned" } }),
   R("POST", "/api/users/:id/approve", "user"),
   R("POST", "/api/users/:id/reject", "user"),
@@ -1231,8 +1232,8 @@ describe("source guard: other ways around the tenant plugin", () => {
   const sources = walk(ROOT).map((f) => [path.relative(ROOT, f).split(path.sep).join("/"), fs.readFileSync(f, "utf8").replace(/^\s*\/\/.*$/gm, "")]);
   const offenders = (re, allowed) => sources.filter(([f, src]) => re.test(src) && !allowed.includes(f)).map(([f]) => f);
 
-  test("raw driver access (Model.collection.*, connection.db) only in the audit verify (super admin), super admin seed and migrations", () => {
-    expect(offenders(/\.collection\.(?!name\b)\w+|connection\.db\b|\.getClient\(|\.db\.collection\(/, ["routes/audit.js", "utils/superAdmin.js", "migrations/index.js"])).toEqual([]);
+  test("raw driver access (Model.collection.*, connection.db) only in the audit verify (super admin), super admin seed migrations and the dev-only demo seed script (refuses NODE_ENV=production)", () => {
+    expect(offenders(/\.collection\.(?!name\b)\w+|connection\.db\b|\.getClient\(|\.db\.collection\(/, ["routes/audit.js", "utils/superAdmin.js", "migrations/index.js", "scripts/seedDemo.js"])).toEqual([]);
   });
   test("$lookup / $unionWith / $graphLookup / $merge / $out only in the model summary (which joins on orgId)", () => {
     expect(offenders(/\$(lookup|unionWith|graphLookup|merge|out)\b/, ["utils/modelSummary.js", "utils/tenant.js", "utils/softDelete.js"])).toEqual([]);
