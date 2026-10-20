@@ -4,6 +4,7 @@ import api, { extractError } from "../api/axios.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { roleHome } from "../roleHome.js";
 import { ErrorBox } from "../components/ui.jsx";
+import PasswordInput from "../components/PasswordInput.jsx";
 import AuthAside, { AuthLoading } from "./AuthAside.jsx";
 
 const FLASH_KEY = "modelward_flash";
@@ -85,8 +86,7 @@ export default function Login() {
             </label>
             <label>
               Password
-              <input
-                type="password"
+              <PasswordInput
                 required
                 autoComplete="current-password"
                 value={form.password}

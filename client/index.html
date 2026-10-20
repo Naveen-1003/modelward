@@ -6,8 +6,18 @@
     <meta name="referrer" content="no-referrer" />
     <meta name="color-scheme" content="light dark" />
     <meta name="description" content="ModelWard: register ML models, score them for accuracy and fairness, and route them through risk-tiered compliance review." />
-    <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#141412" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f4f1ea" />
+    <script>
+      // Apply the saved (or system) theme before first paint so there is no flash.
+      (function () {
+        try {
+          var t = localStorage.getItem("mw-theme");
+          if (t !== "light" && t !== "dark") t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          document.documentElement.setAttribute("data-theme", t);
+          document.querySelector('meta[name="theme-color"]').setAttribute("content", t === "dark" ? "#141412" : "#f4f1ea");
+        } catch (e) {}
+      })();
+    </script>
     <title>ModelWard</title>
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

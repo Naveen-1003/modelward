@@ -35,8 +35,9 @@
   color-scheme: light;
 }
 
+/* Dark: follows the system until the person picks a theme with the toggle (data-theme on <html>). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #141412;
     --surface: #1b1a18;
     --raised: #22211e;
@@ -56,6 +57,26 @@
     --neutral: #aaa699; --neutral-bg: #2c2a26;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #141412;
+  --surface: #1b1a18;
+  --raised: #22211e;
+  --line: #34322d;
+  --line-strong: #4a473f;
+  --ink: #ece9e0;
+  --ink-2: #aaa699;
+  --ink-3: #8f8b7f;
+  --on-ink: #141412;
+
+  --accent: #93a6ff;
+  --accent-soft: #232a4d;
+
+  --ok: #7fd1a0;      --ok-bg: #1d3427;
+  --warn: #f0c46a;    --warn-bg: #3a2e12;
+  --bad: #ff9d8f;     --bad-bg: #44211c;
+  --neutral: #aaa699; --neutral-bg: #2c2a26;
+  color-scheme: dark;
 }
 
 /* =============================================================================
@@ -100,6 +121,14 @@ a { color: var(--accent); text-underline-offset: 3px; }
 }
 .brand { display: flex; align-items: center; gap: 0.6rem; padding: 0 0.4rem; color: var(--ink); text-decoration: none; font: 600 1.05rem var(--font-display); }
 .logo-img { display: block; height: 30px; width: auto; max-width: 100%; }
+.theme-toggle { position: fixed; top: 0.75rem; right: 0.75rem; z-index: 40; width: 36px; min-height: 36px; height: 36px; padding: 0; display: grid; place-items: center; border-radius: var(--radius); background: var(--raised); color: var(--ink-2); border: 1px solid var(--line-strong); }
+.theme-toggle:hover:not(:disabled) { color: var(--ink); background: var(--neutral-bg); opacity: 1; }
+.theme-toggle:focus-visible, .pw-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pw-field { position: relative; display: block; }
+.pw-field input { padding-right: 2.75rem; }
+.pw-toggle { position: absolute; top: 50%; right: 0.3rem; transform: translateY(-50%); width: 34px; min-height: 34px; height: 34px; padding: 0; display: grid; place-items: center; background: transparent; border: 0; color: var(--ink-3); border-radius: var(--radius); }
+.pw-toggle:hover:not(:disabled) { color: var(--ink); background: var(--neutral-bg); opacity: 1; }
+.pw-toggle:active:not(:disabled) { transform: translateY(-50%); }
 .brand-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 5px; background: var(--ink); color: var(--on-ink); font: 500 0.7rem var(--font-mono); letter-spacing: 0.02em; }
 .sidebar nav { display: flex; flex-direction: column; gap: 1.1rem; flex: 1; min-height: 0; overflow-y: auto; }
 .nav-group { display: flex; flex-direction: column; gap: 2px; }
@@ -419,7 +448,7 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 }
 @media (max-width: 760px) {
   .app-shell.has-sidebar { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); align-content: start; }
-  .sidebar { min-width: 0; position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 0.5rem 1rem; padding: 0.6rem 1rem; border-right: 0; border-bottom: 1px solid var(--line); }
+  .sidebar { min-width: 0; position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 0.5rem 1rem; padding: 0.6rem 3.4rem 0.6rem 1rem; border-right: 0; border-bottom: 1px solid var(--line); }
   .sidebar nav { flex: 1 1 auto; flex-direction: row; gap: 0.25rem; order: 3; width: 100%; overflow-x: auto; overflow-y: hidden; min-width: 0; max-width: 100%; }
   .nav-group { flex-direction: row; gap: 0.25rem; }
   .nav-group-label { display: none; }
@@ -442,7 +471,7 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 
 /* Printing (compliance reports): drop the chrome, single column, always light. */
 @media print {
-  :root {
+  :root, :root[data-theme="dark"], :root[data-theme="light"] {
     --bg: #fff; --surface: #fff; --raised: #fff; --line: #cfcbc0; --line-strong: #a9a498;
     --ink: #000; --ink-2: #333; --ink-3: #555; --on-ink: #fff;
     --accent: #1a2f8a; --accent-soft: #e4e8f7;

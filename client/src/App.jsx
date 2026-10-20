@@ -4,6 +4,7 @@ import { useAuth } from "./context/AuthContext.jsx";
 import { roleHome } from "./roleHome.js";
 
 import Navbar from "./components/Navbar.jsx";
+import ThemeToggle from "./components/ThemeToggle.jsx";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
 
 import Login from "./pages/Login.jsx";
@@ -28,6 +29,7 @@ export default function App() {
 
   return (
     <div className={`app-shell${user ? " has-sidebar" : ""}`}>
+      <ThemeToggle />
       {user && <Navbar />}
       <Routes>
         <Route path="/login" element={<Login />} />

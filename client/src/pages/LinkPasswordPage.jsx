@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import api, { extractError, extractFields } from "../api/axios.js";
 import { useConfig } from "../context/ConfigContext.jsx";
 import { ErrorBox } from "../components/ui.jsx";
+import PasswordInput from "../components/PasswordInput.jsx";
 import AuthAside from "./AuthAside.jsx";
 
 // Shared by /verify-email and /setup-password: a one-time link whose token is checked on load,
@@ -179,8 +180,7 @@ export default function LinkPasswordPage({ title, submitLabel, busyLabel, checkP
         <form onSubmit={handleSubmit} noValidate>
           <label>
             Password
-            <input
-              type="password"
+            <PasswordInput
               maxLength={128}
               autoComplete="new-password"
               value={form.password}
@@ -192,8 +192,7 @@ export default function LinkPasswordPage({ title, submitLabel, busyLabel, checkP
           </label>
           <label>
             Confirm password
-            <input
-              type="password"
+            <PasswordInput
               maxLength={128}
               autoComplete="new-password"
               value={form.confirm}
