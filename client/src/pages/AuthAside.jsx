@@ -8,12 +8,13 @@ const STAGES = [
   ["Audit", "Each action logged, read-only"],
 ];
 
+import Logo from "../components/Logo.jsx";
+
 export default function AuthAside() {
   return (
     <aside className="auth-aside">
       <div className="brand">
-        <span className="brand-mark" aria-hidden="true">MW</span>
-        <span>ModelWard</span>
+        <Logo dark />
       </div>
       <div>
         <h2>Every model, accounted for.</h2>

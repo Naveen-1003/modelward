@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import { Icon } from "./ui.jsx";
+import Logo from "./Logo.jsx";
 import { navFor } from "../navConfig.js";
 import { clearNavCounts, useNavCounts } from "../navCounts.js";
 
@@ -29,9 +30,8 @@ export default function Navbar() {
 
   return (
     <aside className="sidebar">
-      <Link className="brand" to="/">
-        <span className="brand-mark" aria-hidden="true">MW</span>
-        <span>ModelWard</span>
+      <Link className="brand" to="/" aria-label="ModelWard home">
+        <Logo />
       </Link>
       <nav aria-label="Main">
         {groups.map((g, gi) => (
